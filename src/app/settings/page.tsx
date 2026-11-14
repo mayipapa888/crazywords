@@ -79,10 +79,14 @@ export default function SettingsPage() {
       <div className="panel p-5 text-sm text-[var(--muted)] space-y-2">
         <p className="font-medium text-[var(--ink)]">语音服务</p>
         <p>
-          当前通过 <code className="bg-[var(--chip)] px-1 rounded">SPEECH_PROVIDER</code>{" "}
-          选择 mock / aliyun stub。真厂商密钥见 <code className="bg-[var(--chip)] px-1 rounded">.env.example</code>。
+          <code className="bg-[var(--chip)] px-1 rounded">SPEECH_PROVIDER</code>：
+          <code className="bg-[var(--chip)] px-1 rounded">mock</code>（开发）或{" "}
+          <code className="bg-[var(--chip)] px-1 rounded">aliyun</code>
+          （真实一句话识别 + 语音合成）。密钥见{" "}
+          <code className="bg-[var(--chip)] px-1 rounded">.env.example</code>
+          ；aliyun 失败不会回退 mock。
         </p>
-        <p>账号：MVP 使用本地演示用户，邮箱魔法链接尚未接入。</p>
+        <p>账号：浏览器会话 cookie 隔离用户；可选 APP_ACCESS_PASSWORD 门禁。邮箱魔法链接尚未接入。</p>
       </div>
     </div>
   );

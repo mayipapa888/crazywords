@@ -63,11 +63,15 @@ export default function DictationPage() {
       const data = await res.json();
       setTtsNote(
         data.mock
-          ? `TTS stub（${data.provider}）：${data.spokenText}`
-          : `TTS：${data.spokenText}`,
+          ? `TTS mock（${data.provider}）：${data.spokenText}`
+          : `TTS（${data.provider}）`,
       );
-      // stub 无音频时，开发期可用浏览器合成作提示（非生产主 TTS）
-      if (data.mock && typeof window !== "undefined" && window.speechSynthesis) {
+      if (data.audioBase64) {
+        const src = `data:${data.mimeType || "audio/mpeg"};base64,${data.audioBase64}`;
+        const audio = new Audio(src);
+        void audio.play().catch(() => undefined);
+      } else if (data.mock && typeof window !== "undefined" && window.speechSynthesis) {
+        // 仅 mock：浏览器合成作开发提示；生产主 TTS 为阿里云
         const u = new SpeechSynthesisUtterance(text);
         u.lang = "zh-CN";
         window.speechSynthesis.cancel();

@@ -1,12 +1,16 @@
-import { NextResponse } from "next/server";
+import { errorJson, jsonWithSession, requireUser } from "@/lib/auth";
 import { buildTodayQueue } from "@/lib/srs/queue";
-import { getOrCreateDemoUser } from "@/lib/user";
 
-export async function GET() {
-  const user = await getOrCreateDemoUser();
-  const queue = await buildTodayQueue(user.id, user.dailyGoalDefault, user.clozeEnabled);
-  return NextResponse.json({
-    ...queue,
-    clozeEnabled: user.clozeEnabled,
-  });
+export async function GET(req: Request) {
+  try {
+    const auth = await requireUser(req);
+    const queue = await buildTodayQueue(
+      auth.user.id,
+      auth.user.dailyGoalDefault,
+      auth.user.clozeEnabled,
+    );
+    return jsonWithSession({ ...queue, clozeEnabled: auth.user.clozeEnabled }, auth);
+  } catch (e) {
+    return errorJson(e, 401);
+  }
 }

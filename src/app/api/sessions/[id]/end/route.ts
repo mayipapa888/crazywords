@@ -1,19 +1,22 @@
-import { NextResponse } from "next/server";
+import { errorJson, jsonWithSession, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
-import { getOrCreateDemoUser } from "@/lib/user";
 
-export async function POST(_: Request, ctx: { params: Promise<{ id: string }> }) {
-  const { id } = await ctx.params;
-  const user = await getOrCreateDemoUser();
-  const session = await prisma.session.findFirst({
-    where: { id, userId: user.id },
-  });
-  if (!session) {
-    return NextResponse.json({ error: "会话不存在" }, { status: 404 });
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const auth = await requireUser(req);
+    const { id } = await ctx.params;
+    const session = await prisma.session.findFirst({
+      where: { id, userId: auth.user.id },
+    });
+    if (!session) {
+      return errorJson(Object.assign(new Error("会话不存在"), { status: 404 }), 404);
+    }
+    const updated = await prisma.session.update({
+      where: { id },
+      data: { endedAt: new Date() },
+    });
+    return jsonWithSession({ sessionId: updated.id, endedAt: updated.endedAt }, auth);
+  } catch (e) {
+    return errorJson(e, 401);
   }
-  const updated = await prisma.session.update({
-    where: { id },
-    data: { endedAt: new Date() },
-  });
-  return NextResponse.json({ sessionId: updated.id, endedAt: updated.endedAt });
 }

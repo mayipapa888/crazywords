@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Noto_Sans_SC, Syne } from "next/font/google";
 import { AppShell } from "@/components/AppShell";
+import { SessionBootstrap } from "@/components/SessionBootstrap";
 import "./globals.css";
 
 const syne = Syne({
@@ -28,7 +29,9 @@ export default function RootLayout({
   return (
     <html lang="zh-CN">
       <body className={`${syne.variable} ${noto.variable} antialiased`}>
-        <AppShell>{children}</AppShell>
+        <SessionBootstrap>
+          <AppShell>{children}</AppShell>
+        </SessionBootstrap>
       </body>
     </html>
   );

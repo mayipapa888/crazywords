@@ -1,52 +1,33 @@
 # CrazyWords
 
-面向自学用户的英语背单词 Web MVP：导入自有词表 → 设定每日目标 → **强制麦克风**的一对一听写（释义拼写 + 可关闭的例句挖空）→ SRS / 错词本复习。辅线：语音查词（ASR stub）。
+面向自学用户的英语背单词 Web MVP：导入自有词表 → 设定每日目标 → **强制麦克风**的一对一听写（释义拼写 + 可关闭的例句挖空）→ SRS / 错词本复习。辅线：语音查词（阿里云 ASR 或 mock）。
 
 > 产品方案 SSOT 在项目 Agent Store：`docs/crazywords-product-plan.md`（本仓库不改该文档）。
 
 ## 本地启动
 
 ```bash
-# 依赖
 npm install
-
-# 环境变量（可直接复制）
 cp .env.example .env
-
-# 数据库（默认 SQLite：prisma/dev.db）
-npx prisma migrate dev --name init
-npm run db:seed   # 可选：写入 3 个样例词
-
-# 开发服务器
+npx prisma migrate dev
+npm run db:seed   # 可选：仅写入无会话绑定的样例（日常用「导入」更贴近真实）
 npm run dev
 ```
 
-浏览器打开 [http://localhost:3000](http://localhost:3000)。
+打开 [http://localhost:3000](http://localhost:3000)。每个浏览器会获得独立会话用户（httpOnly cookie），数据互不共享。
+
+可选：在 `.env` 设置 `APP_ACCESS_PASSWORD` 开启访问门禁。
 
 ### Postgres（可选）
 
-将 `.env` 中 `DATABASE_URL` 改为：
-
-```env
-DATABASE_URL="postgresql://USER:PASSWORD@localhost:5432/crazywords"
-```
-
-并把 `prisma/schema.prisma` 里 `provider = "sqlite"` 改为 `"postgresql"`，再执行 `npx prisma migrate dev`。
+将 `DATABASE_URL` 改为 Postgres 连接串，并把 `prisma/schema.prisma` 的 `provider` 改为 `postgresql`，再 `npx prisma migrate dev`。
 
 ## CSV 样例
 
-文件：[`samples/words.sample.csv`](samples/words.sample.csv)
+[`samples/words.sample.csv`](samples/words.sample.csv)
 
-表头：
-
-```text
-word,gloss_zh,ipa,pos,example,phrases,related
-```
-
-- `phrases` / `related` 多项用 `|` 分隔
-- 同一词表内重复 `word`：**覆盖**整条内容；`CardState` / 错词本按 entry 保留关联
-
-页面「导入」可上传；亦可用 API：
+表头：`word,gloss_zh,ipa,pos,example,phrases,related`  
+`phrases` / `related` 用 `|` 分隔；同词表重复 `word` **覆盖**。
 
 ```bash
 curl -F "file=@samples/words.sample.csv" -F "listName=样例" http://localhost:3000/api/import
@@ -54,51 +35,76 @@ curl -F "file=@samples/words.sample.csv" -F "listName=样例" http://localhost:3
 
 ## 环境变量
 
-见 [`.env.example`](.env.example)：
+见 [`.env.example`](.env.example)。
 
 | 变量 | 说明 |
 |------|------|
-| `DATABASE_URL` | 默认 `file:./dev.db`（相对 `prisma/`） |
-| `SPEECH_PROVIDER` | `mock`（默认）或 `aliyun`（占位 stub，需密钥） |
-| `ASR_ACCESS_KEY_ID` / `ASR_ACCESS_KEY_SECRET` / `ASR_APP_KEY` | 国内 ASR 密钥占位 |
-| `TTS_ACCESS_KEY_ID` / `TTS_ACCESS_KEY_SECRET` / `TTS_APP_KEY` | 国内 TTS 密钥占位 |
-| `DEMO_USER_EMAIL` | 演示用户标记（当前无真实鉴权） |
+| `DATABASE_URL` | 默认 SQLite `file:./dev.db` |
+| `SPEECH_PROVIDER` | `mock`（开发）或 `aliyun`（真实调用；**失败不会静默回 mock**） |
+| `NLS_REGION` | 智能语音地域，默认 `cn-shanghai` |
+| `ASR_ACCESS_KEY_ID` / `ASR_ACCESS_KEY_SECRET` / `ASR_APP_KEY` | 一句话识别 |
+| `TTS_ACCESS_KEY_ID` / `TTS_ACCESS_KEY_SECRET` / `TTS_APP_KEY` | 语音合成 |
+| `TTS_VOICE` / `TTS_FORMAT` / `TTS_SAMPLE_RATE` | TTS 可选参数 |
+| `APP_ACCESS_PASSWORD` | 可选访问门禁 |
+| `MAX_AUDIO_BYTES` / `MAX_CSV_BYTES` | 上传上限 |
 
-## 已实现 / 未接真语音
+**切勿**把真实密钥提交进 Git。
 
-**已实现**
+## 开通阿里云智能语音（ASR + TTS）
 
-- Next.js App Router 全栈 + Prisma（SQLite 默认可跑）
-- CSV 导入（含 `gloss_zh`，重复词覆盖）
-- 词条浏览 / 编辑 / 删除与「资料不全」标记
-- 每日目标 N、例句挖空开关、今日 SRS 队列（到期 → 错词 ≤40%N → 新词；逾期≥N 复习日）
-- 听写 UI：双模式 + **麦克风门禁**（无麦不降级）
-- 拼写判定；发音经可插拔 ASR 接口（mock 默认）
-- TTS 可插拔接口（mock/stub）；开发期 stub 可回退浏览器朗读作提示
-- 错词本；语音查词入口（ASR stub + 文字查词）
-- 演示用户（无邮箱魔法链接）
+1. 开通 [智能语音交互](https://www.aliyun.com/product/nls)（控制台：[NLS Portal](https://nls-portal.console.aliyun.com/)）。
+2. **创建项目**：控制台 → 全部项目 → 创建项目，复制 **AppKey**。  
+   - 听写/查词为英文时，项目需选择支持**英文**的识别模型（以控制台可选模型为准）。  
+   - 语音合成音色在项目/控制台可用列表中选择（默认 `xiaoyun`）。
+3. **AccessKey**：阿里云账号或 RAM 用户创建 `AccessKey ID` / `AccessKey Secret`（建议 RAM + 最小权限，勿用主账号长期密钥）。
+4. 在 `.env` 填写：
 
-**未接 / 占位**
-
-- 真实国内 ASR/TTS HTTP 调用（仅 `aliyun-stub` + 环境变量占位）
-- 邮箱魔法链接鉴权与多用户云同步
-- 浏览器 SpeechSynthesis **不是**生产主 TTS（仅 mock 开发提示）
-
-## 技术结构
-
-```text
-src/app          # 页面与 API
-src/lib/srs      # 队列与简化 SM-2
-src/lib/speech   # ASR/TTS 可插拔（mock / aliyun stub）
-prisma/          # schema + migrate
-samples/         # CSV 样例
+```env
+SPEECH_PROVIDER=aliyun
+NLS_REGION=cn-shanghai
+ASR_ACCESS_KEY_ID=...
+ASR_ACCESS_KEY_SECRET=...
+ASR_APP_KEY=你的项目AppKey
+TTS_ACCESS_KEY_ID=...          # 可与 ASR 相同
+TTS_ACCESS_KEY_SECRET=...
+TTS_APP_KEY=你的项目AppKey     # 可与 ASR 相同
+TTS_VOICE=xiaoyun
 ```
+
+5. 本服务端实现：
+   - **ASR**：一句话识别 RESTful（`/stream/v1/asr`）；浏览器录音经 ffmpeg 转为 16kHz WAV 再上传。
+   - **TTS**：语音合成 RESTful（`/stream/v1/tts`），返回音频给前端播放。
+   - Token：服务端用 AccessKey 调 `CreateToken`，缓存至过期前。
+
+### 试用 / 计费提示
+
+- 新开通通常有**免费试用额度**（以控制台/账单页当前说明为准），用尽后按量计费。
+- Token 本身获取一般不计语音时长；**识别与合成按调用计费**。
+- 请在阿里云费用中心关注额度与账单；生产环境建议设置费用告警与 RAM 限权。
+- 无密钥或调用失败时 API 返回明确错误，**不会**自动改用 mock。本地无密钥请保持 `SPEECH_PROVIDER=mock`。
+
+依赖：本机需安装 **ffmpeg**（ASR 转码）。
+
+## 已实现
+
+- Next.js + Prisma（SQLite）
+- CSV 导入覆盖、词表、每日目标、SRS 队列、错词本
+- 听写双模式 + 麦克风门禁
+- **阿里云真实 ASR/TTS**（可插拔；`mock` 仅开发）
+- 会话 cookie 用户隔离 + 可选密码门禁；上传大小限制
+- 语音查词
+
+## 未做
+
+- 邮箱魔法链接完整账号体系
+- Android
+- 真机阿里云联调需你方密钥（本仓库不提交密钥）
 
 ## 脚本
 
 | 命令 | 作用 |
 |------|------|
 | `npm run dev` | 开发 |
-| `npm run build` / `npm start` | 生产构建与启动 |
-| `npm run db:seed` | 种子数据 |
-| `npx prisma studio` | 可视化数据库 |
+| `npm run build` / `npm start` | 生产 |
+| `npm run db:seed` | 种子 |
+| `npx prisma studio` | 数据库 UI |

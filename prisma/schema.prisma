@@ -11,6 +11,7 @@ datasource db {
 
 model User {
   id                 String   @id @default(cuid())
+  sessionKey         String?  @unique // httpOnly cookie 绑定的会话用户
   locale             String   @default("zh-CN")
   dailyGoalDefault   Int      @default(20)
   clozeEnabled       Boolean  @default(true)

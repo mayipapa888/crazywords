@@ -1,14 +1,10 @@
-import { prisma } from "./db";
+import { requireUser } from "./auth";
 
-/** MVP：单演示用户，无魔法链接鉴权。 */
-export async function getOrCreateDemoUser() {
-  const existing = await prisma.user.findFirst({ orderBy: { createdAt: "asc" } });
-  if (existing) return existing;
-  return prisma.user.create({
-    data: {
-      locale: "zh-CN",
-      dailyGoalDefault: 20,
-      clozeEnabled: true,
-    },
-  });
+/** @deprecated 使用 requireUser；保留别名避免遗漏引用 */
+export async function getOrCreateDemoUser(req?: Request) {
+  if (!req) {
+    throw new Error("需要 Request 以绑定会话用户，请改用 requireUser(req)");
+  }
+  const { user } = await requireUser(req);
+  return user;
 }
