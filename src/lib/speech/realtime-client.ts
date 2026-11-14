@@ -10,6 +10,13 @@ export type RealtimeAsrHandlers = {
   onStopped?: () => void;
 };
 
+export type RealtimeAsrOptions = {
+  /** 模式 A 目标英文词；模式 B 可传中文释义作 mock 目标 */
+  targetText?: string;
+  /** en：拼写朗读；zh：释义口述（AppKey 模型需匹配） */
+  language?: "en" | "zh";
+};
+
 function uuid32() {
   const a = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
@@ -53,7 +60,8 @@ type TokenPayload = {
  */
 export class RealtimeAsrSession {
   private handlers: RealtimeAsrHandlers;
-  private targetWord?: string;
+  private targetText?: string;
+  private language: "en" | "zh";
   private ws: WebSocket | null = null;
   private stream: MediaStream | null = null;
   private audioCtx: AudioContext | null = null;
@@ -65,9 +73,15 @@ export class RealtimeAsrSession {
   private mockTimer: ReturnType<typeof setInterval> | null = null;
   private lastText = "";
 
-  constructor(handlers: RealtimeAsrHandlers, targetWord?: string) {
+  constructor(handlers: RealtimeAsrHandlers, options?: RealtimeAsrOptions | string) {
     this.handlers = handlers;
-    this.targetWord = targetWord;
+    if (typeof options === "string") {
+      this.targetText = options;
+      this.language = "en";
+    } else {
+      this.targetText = options?.targetText;
+      this.language = options?.language || "en";
+    }
   }
 
   get transcript() {
@@ -75,7 +89,7 @@ export class RealtimeAsrSession {
   }
 
   get lemma() {
-    return extractLemmaFromTranscript(this.lastText, this.targetWord);
+    return extractLemmaFromTranscript(this.lastText, this.targetText);
   }
 
   async start() {
@@ -105,11 +119,16 @@ export class RealtimeAsrSession {
 
   private async startMock() {
     this.handlers.onStarted?.();
-    const target = (this.targetWord || "hello").toLowerCase();
+    const fallback = this.language === "zh" ? "放弃" : "hello";
+    const target =
+      this.language === "zh"
+        ? (this.targetText || fallback).replace(/[^\u4e00-\u9fff]/g, "") || fallback
+        : (this.targetText || fallback).toLowerCase();
     let i = 0;
     this.mockTimer = setInterval(() => {
       i += 1;
-      const partial = target.slice(0, Math.min(target.length, Math.ceil(i / 2)));
+      const step = this.language === "zh" ? 1 : Math.ceil(i / 2);
+      const partial = target.slice(0, Math.min(target.length, this.language === "zh" ? i : step));
       this.lastText = partial;
       this.handlers.onPartial?.(partial);
       if (partial === target) {

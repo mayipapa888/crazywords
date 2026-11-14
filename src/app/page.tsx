@@ -49,7 +49,7 @@ export default function HomePage() {
         <div className="relative space-y-4 max-w-xl">
           <p className="font-display text-4xl md:text-5xl tracking-tight">CrazyWords</p>
           <p className="text-lg text-white/85 leading-relaxed">
-            导入自有词表，设定今日目标，用麦克风完成释义拼写与例句挖空听写。
+            导入自有词表，设定今日目标，用麦克风完成双模式听写（释义→拼写 / 单词→中文）。
           </p>
           <div className="flex flex-wrap gap-3 pt-2">
             <Link href="/dictation" className="btn-accent">
@@ -97,7 +97,7 @@ export default function HomePage() {
           <p className="text-[var(--muted)] text-sm">加载中…</p>
         ) : queue.items.length === 0 ? (
           <p className="text-[var(--muted)] text-sm">
-            队列为空。请先到「导入」上传 CSV，或确认词条有释义/例句。
+            队列为空。请先到「导入」上传 CSV，或确认词条有中文释义。
           </p>
         ) : (
           <ul className="divide-y divide-[var(--line)]">
@@ -109,7 +109,7 @@ export default function HomePage() {
                     {item.reason === "due" ? "到期" : item.reason === "wrong" ? "错词" : "新词"}
                   </span>
                   <span className="badge">
-                    {item.mode === "gloss" ? "释义" : "挖空"}
+                    {item.mode === "gloss" ? "释义→拼写" : "单词→中文"}
                   </span>
                 </span>
               </li>

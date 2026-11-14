@@ -1,6 +1,6 @@
 # CrazyWords
 
-面向自学用户的英语背单词 Web MVP：导入自有词表 → 设定每日目标 → **强制麦克风**的一对一听写（释义拼写 + 可关闭的例句挖空）→ SRS / 错词本复习。辅线：语音查词。
+面向自学用户的英语背单词 Web MVP：导入自有词表 → 设定每日目标 → **强制麦克风**的一对一听写（双模式）→ SRS / 错词本复习。辅线：语音查词。
 
 > 产品方案 SSOT：Agent Store `docs/crazywords-product-plan.md`。
 
@@ -36,31 +36,37 @@ npm run dev
 - 模板：导入页「下载 Excel 模板」或 `samples/words.sample.xlsx` / `public/templates/words-import.xlsx`
 - 样例 CSV：`samples/words.sample.csv`
 
-## 实时听写
+## 听写双模式
 
-听写页使用**实时语音识别**（边说边显示）：
+| 模式 | 流程 | 判定 |
+|------|------|------|
+| **A** 报中文 → 写/念单词（`gloss`） | TTS 播中文释义 → **播报结束后**再计时开录 → 实时 ASR 显示在上半区 | 下半区：提取拼写 vs 目标词；读音 vs 识别文本 |
+| **B** 报单词 → 说中文（`meaning`） | TTS/展示英文词 → 播报后直接开录 → 实时 ASR | 提取中文关键字 vs `gloss_zh` |
+
+- 设置项 `clozeEnabled`：**启用模式 B**（关闭则仅模式 A）；队列中与 A 交替
+- 点「说完了」立即停表并判定；否则按 `autoSubmitSeconds` 自动提交
+- 上半实时文本、下半判定分区
+- 无麦克风仍阻断；需 localhost/HTTPS
+
+## 实时听写配置
 
 | 配置项（设置页） | 字段名 | 默认 |
 |------------------|--------|------|
-| 自动开始录音（进题后） | `autoStartRecordSeconds` | **10** |
+| 自动开始录音（模式 A：TTS 结束后） | `autoStartRecordSeconds` | **10** |
 | 自动提交（开录后） | `autoSubmitSeconds` | **15** |
 | 自动下一词（反馈后） | `autoNextWordSeconds` | **30** |
 
-- 识别文本自动提取拼写；发音判定用识别文本 vs 目标词
-- 无麦克风仍阻断；需 localhost/HTTPS
 - `SPEECH_PROVIDER=aliyun`：浏览器 WebSocket → 阿里云 **实时语音识别**（`SpeechTranscriber`）；`mock` 模拟流式出字
 - 签发 Token：`POST /api/speech/nls-token`（需 `ASR_ACCESS_KEY_*` + `ASR_APP_KEY`，项目须开通实时识别）
+- 模式 A 建议英文模型；模式 B 需中文识别能力（AppKey 模型）
 
-### 本地验证实时听写
+### 本地验证
 
 ```bash
-# 1) mock（无需密钥）
 SPEECH_PROVIDER=mock npm run dev
-# 打开 /dictation → 授权麦克风 → 开始听写 → 观察倒计时开录与实时文本
-
-# 2) 阿里云
-# .env 中 SPEECH_PROVIDER=aliyun，填 ASR_*，NLS 项目开通「实时语音识别」+ 英文模型
-npm run dev
+# /dictation → 授权麦 → 开始听写
+# 模式 A：听完 TTS 后再出现开录倒计时；上半实时文本；点「说完了」立即判定拼写/读音
+# 设置关闭「模式 B」可只测模式 A；开启后队列交替出现「单词→中文」
 ```
 
 ## 环境变量（语音相关）
