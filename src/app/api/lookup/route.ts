@@ -3,7 +3,7 @@ import { errorJson, jsonWithSession, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { parseStringArray } from "@/lib/json";
 import { assertByteLimit, bufferFromBase64, MAX_AUDIO_BYTES } from "@/lib/limits";
-import { getAsrProvider } from "@/lib/speech";
+import { getAsrProvider, getSpeechProviderName } from "@/lib/speech";
 
 export async function POST(req: Request) {
   try {
@@ -22,7 +22,7 @@ export async function POST(req: Request) {
         const audio = Buffer.from(await file.arrayBuffer());
         const asr = getAsrProvider();
         const hint = text ? String(text) : undefined;
-        const useHint = (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "mock";
+        const useHint = getSpeechProviderName() === "mock";
         const result = await asr.recognize(audio, {
           language: "en-US",
           hint: useHint ? hint : undefined,
@@ -37,7 +37,7 @@ export async function POST(req: Request) {
       if (body.audioBase64) {
         const audio = bufferFromBase64(String(body.audioBase64), MAX_AUDIO_BYTES, "音频");
         const asr = getAsrProvider();
-        const useHint = (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "mock";
+        const useHint = getSpeechProviderName() === "mock";
         const result = await asr.recognize(audio, {
           language: "en-US",
           hint: useHint ? body.hint || body.text : undefined,

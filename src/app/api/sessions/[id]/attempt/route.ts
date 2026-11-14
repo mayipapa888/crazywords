@@ -7,7 +7,7 @@ import {
   extractChineseFromTranscript,
 } from "@/lib/speech/extract-meaning";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
-import { getAsrProvider } from "@/lib/speech";
+import { getAsrProvider, getSpeechProviderName } from "@/lib/speech";
 import { checkPronunciation, checkSpelling } from "@/lib/spelling";
 import { applyGrade } from "@/lib/srs/schedule";
 
@@ -92,12 +92,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     if (realtimeTranscript != null && realtimeTranscript.trim() !== "") {
       asrTranscript = realtimeTranscript.trim();
       asrProvider =
-        (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "aliyun"
+        getSpeechProviderName() === "aliyun"
           ? "aliyun-realtime"
           : "mock-realtime";
     } else if (audio && audio.length > 0) {
       const asr = getAsrProvider();
-      const useHint = (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "mock";
+      const useHint = getSpeechProviderName() === "mock";
       const asrResult = await asr.recognize(audio, {
         language: mode === "meaning" ? "zh-CN" : "en-US",
         hint: useHint

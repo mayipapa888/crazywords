@@ -1,20 +1,35 @@
 import { NextResponse } from "next/server";
 import { errorJson, jsonWithSession, requireUser } from "@/lib/auth";
 import { getNlsToken } from "@/lib/speech/aliyun-token";
+import {
+  getSpeechProviderName,
+  nlsRegion,
+  nlsWsUrl,
+  requireSpeechKeys,
+} from "@/lib/speech/config";
 
 /**
  * 为浏览器实时识别签发短期 NLS Token。
- * mock 模式不签发真实 Token。
+ * 仅 SPEECH_PROVIDER=mock 时返回 mock（不签发）。
+ * SPEECH_PROVIDER=aliyun 时必须能 CreateToken，缺密钥明确 502，绝不静默 mock。
  */
 export async function POST(req: Request) {
   try {
     const auth = await requireUser(req);
-    const provider = (process.env.SPEECH_PROVIDER || "mock").toLowerCase();
-    const region = process.env.NLS_REGION || "cn-shanghai";
-    const wsUrl =
-      process.env.NLS_WS_URL || `wss://nls-gateway-${region}.aliyuncs.com/ws/v1`;
+    let provider: ReturnType<typeof getSpeechProviderName>;
+    try {
+      provider = getSpeechProviderName();
+    } catch (e) {
+      return NextResponse.json(
+        { error: e instanceof Error ? e.message : "SPEECH_PROVIDER 无效" },
+        { status: 502 },
+      );
+    }
 
-    if (provider !== "aliyun") {
+    const region = nlsRegion();
+    const wsUrl = nlsWsUrl();
+
+    if (provider === "mock") {
       return jsonWithSession(
         {
           provider: "mock",
@@ -22,35 +37,29 @@ export async function POST(req: Request) {
           wsUrl: null,
           token: null,
           appkey: null,
-          note: "SPEECH_PROVIDER=mock：前端模拟实时识别。生产请设 aliyun 并开通「实时语音识别」。",
+          note: "SPEECH_PROVIDER=mock：前端模拟实时识别。生产请设 aliyun，开通「实时语音识别」，并配置 ASR_*。",
         },
         auth,
       );
     }
 
-    const accessKeyId = process.env.ASR_ACCESS_KEY_ID?.trim();
-    const accessKeySecret = process.env.ASR_ACCESS_KEY_SECRET?.trim();
-    const appkey = process.env.ASR_APP_KEY?.trim();
-    if (!accessKeyId || !accessKeySecret || !appkey) {
-      return NextResponse.json(
-        {
-          error:
-            "实时识别需配置 ASR_ACCESS_KEY_ID / ASR_ACCESS_KEY_SECRET / ASR_APP_KEY，且项目需开通实时语音识别能力",
-        },
-        { status: 502 },
-      );
-    }
+    // aliyun：缺密钥直接抛错 → 502，禁止返回 mock:true
+    const keys = requireSpeechKeys("ASR");
+    const token = await getNlsToken({
+      accessKeyId: keys.accessKeyId,
+      accessKeySecret: keys.accessKeySecret,
+      region,
+    });
 
-    const token = await getNlsToken({ accessKeyId, accessKeySecret, region });
     return jsonWithSession(
       {
         provider: "aliyun",
         mock: false,
         token,
-        appkey,
+        appkey: keys.appKey,
         wsUrl,
         region,
-        note: "请确保 NLS 项目已开通「实时语音识别」；听写英文需选英文模型。",
+        note: "浏览器将连接 SpeechTranscriber WebSocket。请确保项目已开通「实时语音识别」；模式 A 英文模型、模式 B 中文能力。",
       },
       auth,
     );

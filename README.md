@@ -56,36 +56,57 @@ npm run dev
 | 自动提交（开录后） | `autoSubmitSeconds` | **15** |
 | 自动下一词（反馈后） | `autoNextWordSeconds` | **30** |
 
-- `SPEECH_PROVIDER=aliyun`：浏览器 WebSocket → 阿里云 **实时语音识别**（`SpeechTranscriber`）；`mock` 模拟流式出字
-- 签发 Token：`POST /api/speech/nls-token`（需 `ASR_ACCESS_KEY_*` + `ASR_APP_KEY`，项目须开通实时识别）
-- 模式 A 建议英文模型；模式 B 需中文识别能力（AppKey 模型）
+### 阿里云 ASR + TTS（生产）
+
+`SPEECH_PROVIDER=aliyun` 时：
+
+| 能力 | 实现 | 必填 |
+|------|------|------|
+| 听写实时识别 | 浏览器 WebSocket → NLS **SpeechTranscriber**（`POST /api/speech/nls-token` 签发 Token） | `ASR_ACCESS_KEY_ID` / `ASR_ACCESS_KEY_SECRET` / `ASR_APP_KEY`，`NLS_REGION` |
+| 题目播报 | 服务端阿里云 **语音合成** REST → 返回 `audioBase64` 播放（**不用**浏览器 SpeechSynthesis） | `TTS_ACCESS_KEY_ID` / `TTS_ACCESS_KEY_SECRET` / `TTS_APP_KEY`（可与 ASR_* 填相同；TTS_* 空时回退读 ASR_*） |
+
+- 缺密钥或调用失败 → **明确报错**，不会静默改走 mock  
+- mock **仅**当 `SPEECH_PROVIDER=mock`（本地开发）  
+- 项目须开通：**实时语音识别** + **语音合成**；模式 A 建议英文识别模型，模式 B 需中文识别  
+
+状态自检：`GET /api/speech/status`（不返回密钥）。
 
 ### 本地验证
 
 ```bash
+# A) mock（无需密钥）
 SPEECH_PROVIDER=mock npm run dev
-# /dictation → 授权麦 → 开始听写
-# 模式 A：听完 TTS 后再出现开录倒计时；上半实时文本；点「说完了」立即判定拼写/读音
-# 设置关闭「模式 B」可只测模式 A；开启后队列交替出现「单词→中文」
+# /dictation：TTS 用浏览器顶替；ASR 模拟边说边出字
+
+# B) 阿里云（自备密钥，勿提交仓库）
+# .env:
+#   SPEECH_PROVIDER=aliyun
+#   NLS_REGION=cn-shanghai
+#   ASR_ACCESS_KEY_ID=...  ASR_ACCESS_KEY_SECRET=...  ASR_APP_KEY=...
+#   TTS_ACCESS_KEY_ID=...  TTS_ACCESS_KEY_SECRET=...  TTS_APP_KEY=...  # 可与 ASR 相同
+npm run dev
+# 故意留空密钥应看到 502 / 页面错误提示，而不是 mock
+# /dictation：播报为阿里云音频；开录后浏览器连 wss://nls-gateway-*.aliyuncs.com/ws/v1
 ```
 
 ## 环境变量（语音相关）
 
-| 变量 | 说明 |
-|------|------|
-| `SPEECH_PROVIDER` | `mock` / `aliyun` |
-| `NLS_REGION` | 默认 `cn-shanghai` |
-| `NLS_WS_URL` | 可选，默认 `wss://nls-gateway-{region}.aliyuncs.com/ws/v1` |
-| `ASR_ACCESS_KEY_ID` / `ASR_ACCESS_KEY_SECRET` / `ASR_APP_KEY` | 实时识别 + 一句话 ASR |
-| `TTS_*` | 语音合成 |
+| 变量 | 必填（aliyun） | 说明 |
+|------|----------------|------|
+| `SPEECH_PROVIDER` | 是（`aliyun`） | `mock` 仅本地 |
+| `NLS_REGION` | 建议 | 默认 `cn-shanghai` |
+| `NLS_WS_URL` | 否 | 默认 `wss://nls-gateway-{region}.aliyuncs.com/ws/v1` |
+| `ASR_ACCESS_KEY_ID` / `ASR_ACCESS_KEY_SECRET` / `ASR_APP_KEY` | 是 | 实时识别 Token + 一句话 ASR |
+| `TTS_ACCESS_KEY_ID` / `TTS_ACCESS_KEY_SECRET` / `TTS_APP_KEY` | 是* | 语音合成；*可与 ASR_* 相同，空则回退 ASR_* |
+| `TTS_VOICE` / `TTS_VOICE_EN` | 否 | 中/英发音人 |
 
 完整列表见 `.env.example`。**勿提交真实密钥。**
 
 ## 开通阿里云
 
 1. [智能语音交互](https://www.aliyun.com/product/nls) → 创建项目拿 AppKey  
-2. 开通 **实时语音识别**（听写）与语音合成；英文听写选英文模型  
-3. AccessKey + `.env` 如上  
+2. 开通 **实时语音识别** 与 **语音合成**；英文听写选英文模型  
+3. 将 AccessKey / AppKey 写入本地 `.env`（`SPEECH_PROVIDER=aliyun`），勿提交仓库  
 
 ## 上海初中考纲 2026
 

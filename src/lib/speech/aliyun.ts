@@ -1,22 +1,10 @@
 import { getNlsToken } from "./aliyun-token";
 import { toAliyunAsrWav } from "./audio-convert";
+import { nlsRegion, requireSpeechKeys } from "./config";
 import type { AsrProvider, AsrResult, TtsProvider, TtsResult } from "./types";
 
-function requireSpeechKeys(kind: "ASR" | "TTS") {
-  const accessKeyId = process.env[`${kind}_ACCESS_KEY_ID`]?.trim();
-  const accessKeySecret = process.env[`${kind}_ACCESS_KEY_SECRET`]?.trim();
-  const appKey = process.env[`${kind}_APP_KEY`]?.trim();
-  if (!accessKeyId || !accessKeySecret || !appKey) {
-    throw new Error(
-      `${kind} 密钥未配置。请设置 ${kind}_ACCESS_KEY_ID、${kind}_ACCESS_KEY_SECRET、${kind}_APP_KEY，或将 SPEECH_PROVIDER=mock 仅用于本地开发。`,
-    );
-  }
-  return { accessKeyId, accessKeySecret, appKey };
-}
-
 function gatewayBase(): string {
-  const region = process.env.NLS_REGION || "cn-shanghai";
-  return `https://nls-gateway-${region}.aliyuncs.com`;
+  return `https://nls-gateway-${nlsRegion()}.aliyuncs.com`;
 }
 
 /** 一句话识别 RESTful（适合听写短录音） */
@@ -29,6 +17,7 @@ export class AliyunAsrProvider implements AsrProvider {
     const token = await getNlsToken({
       accessKeyId: keys.accessKeyId,
       accessKeySecret: keys.accessKeySecret,
+      region: nlsRegion(),
     });
 
     const { wav, format } = await toAliyunAsrWav(audio);
@@ -92,11 +81,14 @@ export class AliyunTtsProvider implements TtsProvider {
     const token = await getNlsToken({
       accessKeyId: keys.accessKeyId,
       accessKeySecret: keys.accessKeySecret,
+      region: nlsRegion(),
     });
 
+    const isEn = Boolean(opts?.language?.toLowerCase().startsWith("en"));
     const voice =
-      process.env.TTS_VOICE?.trim() ||
-      (opts?.language?.toLowerCase().startsWith("en") ? "betty" : "xiaoyun");
+      (isEn
+        ? process.env.TTS_VOICE_EN?.trim() || process.env.TTS_VOICE?.trim()
+        : process.env.TTS_VOICE?.trim()) || (isEn ? "betty" : "xiaoyun");
     const format = (process.env.TTS_FORMAT || "mp3").toLowerCase();
     const sampleRate = Number(process.env.TTS_SAMPLE_RATE || 16000);
 

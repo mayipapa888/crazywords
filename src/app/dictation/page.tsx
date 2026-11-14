@@ -134,17 +134,33 @@ export default function DictationPage() {
         body: JSON.stringify({ text, language: lang }),
       });
       const data = await res.json();
+      if (!res.ok) {
+        const msg = data.error || "TTS 失败";
+        setTtsNote(`TTS 失败：${msg}`);
+        setError(msg);
+        // aliyun 生产路径禁止回退浏览器 SpeechSynthesis
+        return;
+      }
       setTtsNote(
-        data.mock ? `TTS mock（${data.provider}）` : `TTS（${data.provider}）`,
+        data.mock
+          ? `TTS mock（${data.provider}）· 仅开发；生产请 SPEECH_PROVIDER=aliyun`
+          : `阿里云 TTS（${data.provider}）`,
       );
       if (data.audioBase64) {
         await playAudioBase64(data.audioBase64, data.mimeType);
-      } else if (data.mock) {
-        await playUtterance(text, lang);
+        return;
       }
-    } catch {
-      setTtsNote("TTS 调用失败，已跳过播报");
-      await playUtterance(text, lang);
+      // 仅 mock 允许用浏览器合成顶替无音频响应
+      if (data.mock) {
+        await playUtterance(text, lang);
+        return;
+      }
+      setError("TTS 未返回音频。aliyun 模式必须使用阿里云语音合成。");
+      setTtsNote("TTS 未返回音频");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "TTS 调用失败";
+      setTtsNote(msg);
+      setError(msg);
     }
   }, []);
 

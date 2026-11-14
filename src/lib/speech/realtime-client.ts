@@ -97,7 +97,10 @@ export class RealtimeAsrSession {
     const tokenRes = await fetch("/api/speech/nls-token", { method: "POST" });
     const cred = (await tokenRes.json()) as TokenPayload & { error?: string };
     if (!tokenRes.ok) {
-      throw new Error(cred.error || "获取语音 Token 失败");
+      throw new Error(
+        cred.error ||
+          "获取实时识别 Token 失败。SPEECH_PROVIDER=aliyun 时请配置 ASR_* 并开通「实时语音识别」。",
+      );
     }
 
     this.stream = await navigator.mediaDevices.getUserMedia({
@@ -105,13 +108,24 @@ export class RealtimeAsrSession {
     });
     this.running = true;
 
+    // 仅服务端明确返回 mock 时走本地模拟；aliyun 缺凭证由接口 502，不会静默降级
     if (cred.mock || cred.provider === "mock") {
       await this.startMock();
       return;
     }
 
+    if (cred.provider !== "aliyun") {
+      this.running = false;
+      throw new Error(
+        `未知实时识别提供方：${cred.provider || "?"}。请设 SPEECH_PROVIDER=aliyun 或 mock。`,
+      );
+    }
+
     if (!cred.token || !cred.appkey || !cred.wsUrl) {
-      throw new Error("实时识别凭证不完整");
+      this.running = false;
+      throw new Error(
+        "实时识别凭证不完整（缺 token/appkey/wsUrl）。请检查 ASR_* 与 NLS_WS_URL。",
+      );
     }
     this.appkey = cred.appkey;
     await this.startAliyun(cred.token, cred.appkey, cred.wsUrl);

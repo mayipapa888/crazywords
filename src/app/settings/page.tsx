@@ -2,6 +2,17 @@
 
 import { useEffect, useState } from "react";
 
+type SpeechStatus = {
+  provider?: string;
+  mock?: boolean;
+  ready?: boolean;
+  asrConfigured?: boolean;
+  ttsConfigured?: boolean;
+  nlsRegion?: string;
+  note?: string;
+  error?: string;
+};
+
 export default function SettingsPage() {
   const [goal, setGoal] = useState(20);
   const [cloze, setCloze] = useState(true);
@@ -10,6 +21,7 @@ export default function SettingsPage() {
   const [autoNext, setAutoNext] = useState(30);
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [speech, setSpeech] = useState<SpeechStatus | null>(null);
 
   useEffect(() => {
     fetch("/api/me")
@@ -21,6 +33,10 @@ export default function SettingsPage() {
         setAutoStart(m.autoStartRecordSeconds ?? 10);
         setAutoNext(m.autoNextWordSeconds ?? 30);
       });
+    fetch("/api/speech/status")
+      .then((r) => r.json())
+      .then((s) => setSpeech(s))
+      .catch(() => setSpeech({ error: "无法读取语音配置状态" }));
   }, []);
 
   async function save(e: React.FormEvent) {
@@ -134,11 +150,26 @@ export default function SettingsPage() {
       </form>
 
       <div className="panel p-5 text-sm text-[var(--muted)] space-y-2">
-        <p className="font-medium text-[var(--ink)]">语音服务</p>
+        <p className="font-medium text-[var(--ink)]">语音服务（服务端环境变量）</p>
+        {speech ? (
+          <ul className="space-y-1">
+            <li>
+              提供方：<strong className="text-[var(--ink)]">{speech.provider || "—"}</strong>
+              {speech.ready ? " · 就绪" : " · 未就绪"}
+            </li>
+            <li>ASR 密钥：{speech.asrConfigured ? "已配置" : "缺失"}</li>
+            <li>TTS 密钥：{speech.ttsConfigured ? "已配置" : "缺失"}</li>
+            {speech.nlsRegion && <li>地域：{speech.nlsRegion}</li>}
+            <li>{speech.note || speech.error}</li>
+          </ul>
+        ) : (
+          <p>读取中…</p>
+        )}
         <p>
-          <code className="bg-[var(--chip)] px-1 rounded">SPEECH_PROVIDER=aliyun</code>{" "}
-          时听写使用<strong>实时语音识别</strong>（WebSocket）；项目须开通该能力。开发可用{" "}
-          <code className="bg-[var(--chip)] px-1 rounded">mock</code> 模拟边说边出字。
+          生产：<code className="bg-[var(--chip)] px-1 rounded">SPEECH_PROVIDER=aliyun</code>{" "}
+          + <code className="bg-[var(--chip)] px-1 rounded">ASR_*</code> /{" "}
+          <code className="bg-[var(--chip)] px-1 rounded">TTS_*</code>
+          ；开通「实时语音识别」与「语音合成」。缺密钥会报错，不会静默 mock。
         </p>
       </div>
     </div>
