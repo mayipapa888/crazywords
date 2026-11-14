@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MicGate } from "@/components/MicGate";
-import { MicRecorder } from "@/lib/mic";
+import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
+import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
-type Entry = {
-  id: string;
+type EntryView = {
+  id: string | null;
   word: string;
   glossZh: string | null;
   ipa: string | null;
@@ -15,31 +16,47 @@ type Entry = {
   related: string[];
 };
 
+type LookupResult = {
+  query: string;
+  found: boolean;
+  source?: string;
+  message?: string;
+  warnings?: string[];
+  entry?: EntryView | null;
+  fromAsr?: boolean;
+};
+
 export default function LookupPage() {
   const [micOk, setMicOk] = useState(false);
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
-  const [recorder] = useState(() => new MicRecorder());
-  const [result, setResult] = useState<{
-    query: string;
-    found: boolean;
-    message?: string;
-    entry?: Entry;
-    fromAsr?: boolean;
-  } | null>(null);
+  const [result, setResult] = useState<LookupResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [addMsg, setAddMsg] = useState<string | null>(null);
+  const asrRef = useRef<RealtimeAsrSession | null>(null);
+  const textRef = useRef("");
 
-  useEffect(() => () => recorder.cleanup(), [recorder]);
+  useEffect(() => {
+    return () => {
+      void asrRef.current?.stop().catch(() => undefined);
+    };
+  }, []);
 
-  async function lookupText() {
+  const runLookup = useCallback(async (query: string) => {
+    const q = query.trim();
+    if (!q) {
+      setError("请输入或语音识别后再查询");
+      return;
+    }
     setBusy(true);
     setError(null);
+    setAddMsg(null);
     try {
       const res = await fetch("/api/lookup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text: q }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -47,41 +64,85 @@ export default function LookupPage() {
         return;
       }
       setResult(data);
+      if (data.query) {
+        setText(data.query);
+        textRef.current = data.query;
+      }
+    } catch {
+      setError("查词失败");
     } finally {
       setBusy(false);
     }
+  }, []);
+
+  async function startVoice() {
+    setError(null);
+    setAddMsg(null);
+    try {
+      const session = new RealtimeAsrSession(
+        {
+          onPartial: (t) => {
+            // 实时写入可编辑框（优先提取英文 lemma，否则保留全文）
+            const lemma = extractLemmaFromTranscript(t);
+            const next = lemma || t;
+            textRef.current = next;
+            setText(next);
+          },
+          onFinal: (t) => {
+            const lemma = extractLemmaFromTranscript(t);
+            const next = lemma || t;
+            textRef.current = next;
+            setText(next);
+          },
+          onError: (e) => setError(e.message),
+        },
+        { language: "en", targetText: textRef.current || undefined },
+      );
+      asrRef.current = session;
+      await session.start();
+      setRecording(true);
+    } catch (e) {
+      setMicOk(false);
+      setError(e instanceof Error ? e.message : "无法开始实时识别");
+    }
   }
 
-  async function toggleVoice() {
-    setError(null);
-    if (!recording) {
-      try {
-        await recorder.start();
-        setRecording(true);
-      } catch {
-        setError("无法录音，请授权麦克风");
-        setMicOk(false);
-      }
-      return;
-    }
+  async function stopVoice() {
+    const s = asrRef.current;
+    asrRef.current = null;
+    if (s) await s.stop().catch(() => undefined);
+    setRecording(false);
+  }
+
+  async function addToList() {
+    if (!result?.entry?.word) return;
     setBusy(true);
+    setAddMsg(null);
+    setError(null);
     try {
-      const blob = await recorder.stop();
-      setRecording(false);
-      const form = new FormData();
-      form.append("audio", blob, "query.webm");
-      if (text.trim()) form.append("text", text.trim()); // mock ASR hint 可选
-      const res = await fetch("/api/lookup", { method: "POST", body: form });
+      const e = result.entry;
+      const res = await fetch("/api/entries/manual", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          listName: "查词收藏",
+          word: e.word,
+          glossZh: e.glossZh,
+          ipa: e.ipa,
+          pos: e.pos,
+          example: e.example,
+          phrases: e.phrases,
+          related: e.related,
+        }),
+      });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "语音查词失败");
+        setError(data.error || "加入词表失败");
         return;
       }
-      setResult(data);
-      if (data.query) setText(data.query);
+      setAddMsg(data.overwritten ? "已覆盖写入词表「查词收藏」" : "已加入词表「查词收藏」");
     } catch {
-      setError("语音查词失败");
-      setRecording(false);
+      setError("加入词表失败");
     } finally {
       setBusy(false);
     }
@@ -92,7 +153,7 @@ export default function LookupPage() {
       <div>
         <h1 className="font-display text-3xl">语音查词</h1>
         <p className="text-[var(--muted)] mt-1">
-          录音经服务端 ASR stub 转写后查库；亦可直接输入单词。
+          实时识别写入下方输入框，可改后再查询。支持中文或英文；先查本地词表，没有再外网补全。
         </p>
       </div>
 
@@ -101,32 +162,49 @@ export default function LookupPage() {
       ) : (
         <div className="panel p-6 space-y-4">
           <div>
-            <label className="label">单词</label>
+            <label className="label">查询（可编辑）</label>
             <input
-              className="field"
+              className="field text-lg"
               value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="输入或语音识别"
-              onKeyDown={(e) => e.key === "Enter" && lookupText()}
+              onChange={(e) => {
+                textRef.current = e.target.value;
+                setText(e.target.value);
+              }}
+              placeholder="说英语单词或中文释义，或直接输入"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void runLookup(text);
+              }}
             />
           </div>
           <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-primary" disabled={busy} onClick={lookupText}>
-              文字查词
-            </button>
+            {!recording ? (
+              <button type="button" className="btn-secondary" disabled={busy} onClick={() => void startVoice()}>
+                开始语音识别
+              </button>
+            ) : (
+              <button type="button" className="btn-accent" disabled={busy} onClick={() => void stopVoice()}>
+                停止识别
+              </button>
+            )}
             <button
               type="button"
-              className={recording ? "btn-accent" : "btn-secondary"}
-              disabled={busy}
-              onClick={toggleVoice}
+              className="btn-primary"
+              disabled={busy || !text.trim()}
+              onClick={() => void runLookup(text)}
             >
-              {recording ? "停止并识别" : "语音查词"}
+              {busy ? "查询中…" : "确定查询"}
             </button>
           </div>
+          {recording && (
+            <p className="text-xs text-[var(--accent)]">实时识别中…可随时改字后点「确定查询」</p>
+          )}
           {error && (
             <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
               {error}
             </p>
+          )}
+          {addMsg && (
+            <p className="text-sm text-[var(--ok)] bg-[var(--ok-soft)] px-3 py-2 rounded-md">{addMsg}</p>
           )}
         </div>
       )}
@@ -135,10 +213,18 @@ export default function LookupPage() {
         <div className="panel p-6 space-y-3">
           <p className="text-sm text-[var(--muted)]">
             查询「{result.query}」
-            {result.fromAsr ? " · 来自 ASR" : ""}
+            {result.source === "local"
+              ? " · 本地词表"
+              : result.source === "external"
+                ? " · 外网补全"
+                : ""}
+            {result.fromAsr ? " · ASR" : ""}
           </p>
+          {result.warnings?.length ? (
+            <p className="text-xs text-[var(--muted)]">{result.warnings.join("；")}</p>
+          ) : null}
           {!result.found || !result.entry ? (
-            <p className="font-display text-xl">{result.message || "词库中无此词"}</p>
+            <p className="font-display text-xl">{result.message || "未找到"}</p>
           ) : (
             <>
               <p className="font-display text-3xl">
@@ -166,6 +252,14 @@ export default function LookupPage() {
                   {result.entry.related.join(" · ")}
                 </p>
               )}
+              <button
+                type="button"
+                className="btn-primary w-full mt-2"
+                disabled={busy}
+                onClick={() => void addToList()}
+              >
+                加入词表
+              </button>
             </>
           )}
         </div>
