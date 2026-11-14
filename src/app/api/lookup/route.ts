@@ -14,6 +14,15 @@ function normalizeEn(s: string) {
   return s.trim().toLowerCase().replace(/[^\w'-]/g, "");
 }
 
+/** 外网补全用：保留词间空格的多词/短语输入（本地匹配仍走 normalizeEn） */
+function normalizeSpacedEn(s: string) {
+  return s
+    .trim()
+    .replace(/[^\w\s'-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 /**
  * 在当前用户全部词表的候选条目里做本地匹配：
  * 英文精确命中优先，其次中文释义包含。命中即说明该词已在词表中。
@@ -22,10 +31,19 @@ function matchLocalEntry<T extends { word: string; glossZh: string | null }>(
   candidates: T[],
   qEn: string,
   qZh: string,
+  qPhrase?: string,
 ): T | null {
   if (qEn) {
     const byEn = candidates.find((e) => e.word.toLowerCase() === qEn);
     if (byEn) return byEn;
+  }
+  // 多词短语：按保留空格的词形精确匹配（单词仍走上面的既有逻辑）
+  if (qPhrase) {
+    const target = normalizeSpacedEn(qPhrase).toLowerCase();
+    const byPhrase = candidates.find(
+      (e) => normalizeSpacedEn(e.word).toLowerCase() === target,
+    );
+    if (byPhrase) return byPhrase;
   }
   if (!qZh) return null;
   return (
@@ -151,9 +169,12 @@ export async function POST(req: Request) {
     const qZh = hasChinese(queryRaw)
       ? queryRaw.replace(/[^\u4e00-\u9fff·．.、，,\s]/g, "").replace(/\s+/g, "")
       : "";
+    // 多词短语保留整串（含空格）去补全；本地匹配额外按整串词形命中
+    const isMultiWord = /\s/.test(queryRaw) && !hasChinese(queryRaw);
+    const qPhrase = isMultiWord ? normalizeSpacedEn(queryRaw) : "";
 
     // 1) 本地词表：英文精确 / 中文释义包含
-    const entry = matchLocalEntry(candidates, qEn, qZh);
+    const entry = matchLocalEntry(candidates, qEn, qZh, qPhrase);
 
     if (entry) {
       return jsonWithSession(
@@ -173,7 +194,7 @@ export async function POST(req: Request) {
     }
 
     // 2) 外网补全：中文先译成英文 lemma，再 enrich
-    let lemma = qEn;
+    let lemma = isMultiWord ? qPhrase : qEn;
     const warnings: string[] = [];
     if (!lemma && qZh) {
       const translated = await translateZhToEn(qZh);
@@ -211,11 +232,13 @@ export async function POST(req: Request) {
         enrich.examples.length ||
         enrich.synonyms.length ||
         enrich.antonyms.length ||
-        enrich.phrases.length,
+        enrich.phrases.length ||
+        enrich.senses.length,
     );
     // 外网词也可能已存在于词表（如中文释义未命中、但译出的英文词已在表中）
+    const resultWord = enrich.word || lemma;
     const existingLocal = hasContent
-      ? matchLocalEntry(candidates, normalizeEn(enrich.word || lemma), "")
+      ? matchLocalEntry(candidates, normalizeEn(resultWord), "", isMultiWord ? resultWord : "")
       : null;
     return jsonWithSession(
       {
@@ -228,13 +251,17 @@ export async function POST(req: Request) {
         message: hasContent
           ? existingLocal
             ? "该词已在本地词表中，无需重复加入"
-            : "词库无此词，已从外网补全（可加入词表）"
-          : "未找到",
+            : isMultiWord
+              ? "词库无此短语，已从外网补全整条短语（中心词义项见 senses）"
+              : "词库无此词，已从外网补全（可加入词表）"
+          : isMultiWord
+            ? `未找到短语「${queryRaw}」：词典无整条记录，Datamuse 也无搭配证据，请核对拼写或手填`
+            : "未找到",
         warnings,
         entry: hasContent
           ? {
               id: existingLocal?.id ?? null,
-              word: enrich.word || lemma,
+              word: resultWord,
               glossZh: enrich.glossZh,
               ipa: enrich.ipa,
               pos: enrich.pos,
@@ -244,6 +271,7 @@ export async function POST(req: Request) {
               synonyms: enrich.synonyms,
               antonyms: enrich.antonyms,
               related: enrich.related,
+              senses: enrich.senses,
             }
           : null,
         enrich,

@@ -5,6 +5,12 @@ import { MicGate } from "@/components/MicGate";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
 import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
+type SenseView = {
+  pos: string;
+  defEn: string;
+  defZh: string | null;
+};
+
 type EntryView = {
   id: string | null;
   word: string;
@@ -17,6 +23,7 @@ type EntryView = {
   synonyms?: string[];
   antonyms?: string[];
   related: string[];
+  senses?: SenseView[];
 };
 
 type LookupResult = {
@@ -183,6 +190,7 @@ export default function LookupPage() {
   const synonyms = entry?.synonyms ?? [];
   const antonyms = entry?.antonyms ?? [];
   const related = entry?.related ?? [];
+  const senses = (entry?.senses ?? []).slice(0, 5);
   // 本地词条没有 synonyms 字段，用 related 兜底；外网 related 是 synonyms 子集，避免重复展示
   const showRelated = synonyms.length === 0 && related.length > 0;
 
@@ -280,13 +288,31 @@ export default function LookupPage() {
                 )}
               </p>
               {result.entry.ipa && <p className="text-xs text-[var(--muted)]">{result.entry.ipa}</p>}
-              <p className="text-sm">{result.entry.glossZh}</p>
-              {(exampleLines.length > 0 ||
+              <p className="whitespace-pre-line break-words text-sm leading-relaxed">
+                {result.entry.glossZh}
+              </p>
+              {(senses.length > 0 ||
+                exampleLines.length > 0 ||
                 phrases.length > 0 ||
                 synonyms.length > 0 ||
                 antonyms.length > 0 ||
                 showRelated) && (
                 <div className="no-scrollbar max-h-40 shrink-0 space-y-1 overflow-y-auto text-xs">
+                  {senses.length > 0 && (
+                    <div>
+                      <span className="text-[var(--muted)]">义项：</span>
+                      <ul className="mt-0.5 space-y-0.5">
+                        {senses.map((sense, i) => (
+                          <li key={`${i}-${sense.defEn}`} className="flex gap-1 leading-snug">
+                            {sense.pos && (
+                              <span className="shrink-0 text-[var(--muted)]">{sense.pos}</span>
+                            )}
+                            <span>{sense.defZh || sense.defEn}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   {exampleLines.length > 0 && (
                     <div>
                       <span className="text-[var(--muted)]">例句：</span>
