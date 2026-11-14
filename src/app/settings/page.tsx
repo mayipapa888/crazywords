@@ -92,11 +92,11 @@ export default function SettingsPage() {
             onChange={(e) => setCloze(e.target.checked)}
           />
           <span>
-            <span className="font-medium block">启用模式 B：报单词 → 说中文</span>
+            <span className="font-medium block">（兼容）队列含模式 B 标记</span>
             <span className="text-sm text-[var(--muted)]">
-              关闭后仅模式 A（报中文 → 拼写朗读）。字段仍为{" "}
+              听写模式请在「听写」页用按钮点选。此开关仅保留字段{" "}
               <code className="bg-[var(--chip)] px-1 rounded">clozeEnabled</code>
-              。默认开启；队列中与模式 A 交替出题。
+              ，不再作为进场切换方式。
             </span>
           </span>
         </label>
