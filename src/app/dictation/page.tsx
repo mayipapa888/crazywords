@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MicGate } from "@/components/MicGate";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
-import { extractChineseFromTranscript } from "@/lib/speech/extract-meaning";
+import { extractChineseFromTranscript, segmentChinese } from "@/lib/speech/extract-meaning";
 import { playFailChime, playSuccessChime } from "@/lib/speech/play-sfx";
 import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
@@ -33,7 +33,10 @@ type Feedback = {
     word: string;
     glossZh: string | null;
     ipa: string | null;
+    pos: string | null;
     example: string | null;
+    phrases?: string[];
+    related?: string[];
   };
 };
 
@@ -90,6 +93,29 @@ function dictationTtsText(item: QueueItem): { text: string; lang: string } {
     )
     .trim();
   return { text: gloss, lang: "zh-CN" };
+}
+
+/** 答错后的正解卡片：词性、音标、例句、词组、相近词一次给全 */
+function AnswerCard({ answer }: { answer: Feedback["answer"] }) {
+  const rows: { label: string; value: string; wide?: boolean }[] = [
+    { label: "单词", value: answer.word },
+    { label: "音标", value: answer.ipa || "—" },
+    { label: "词性", value: answer.pos || "—" },
+    { label: "释义", value: answer.glossZh || "—", wide: true },
+    { label: "例句", value: answer.example || "—", wide: true },
+    { label: "词组", value: (answer.phrases || []).join(" / ") || "—", wide: true },
+    { label: "相近", value: (answer.related || []).join(" / ") || "—", wide: true },
+  ];
+  return (
+    <div className="no-scrollbar grid max-h-[34vh] grid-cols-2 gap-x-3 gap-y-0.5 overflow-y-auto rounded-md border border-[var(--line)] bg-[var(--panel)] p-2 text-xs leading-snug">
+      {rows.map((row) => (
+        <p key={row.label} className={row.wide ? "col-span-2" : ""}>
+          <span className="text-[var(--muted)]">{row.label}：</span>
+          <span className="text-[var(--ink)]">{row.value}</span>
+        </p>
+      ))}
+    </div>
+  );
 }
 
 export default function DictationPage() {
@@ -186,6 +212,31 @@ export default function DictationPage() {
       const msg = e instanceof Error ? e.message : "TTS 调用失败";
       setTtsNote(msg);
       setError(msg);
+    }
+  }, []);
+
+  /** 答错后的正解朗读：连读 3 遍单词，遍与遍之间留 0.7s 间隔 */
+  const speakWordThreeTimes = useCallback(async (word: string) => {
+    const speakOnce = async () => {
+      try {
+        const res = await fetch("/api/speech/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: word, language: "en-US" }),
+        });
+        const data = await res.json();
+        if (res.ok && data.audioBase64) {
+          await playAudioBase64(data.audioBase64, data.mimeType);
+          return;
+        }
+        await playUtterance(word, "en-US");
+      } catch {
+        await playUtterance(word, "en-US");
+      }
+    };
+    for (let i = 0; i < 3; i += 1) {
+      await speakOnce();
+      if (i < 2) await new Promise((resolve) => setTimeout(resolve, 700));
     }
   }, []);
 
@@ -346,16 +397,17 @@ export default function DictationPage() {
           return;
         }
 
-        // 错误：惋惜音 + 红叉，仅可重试当前词
+        // 错误：惋惜音 + 红叉 + 正解朗读 3 遍，仅可重试当前词
         playFailChime();
         setFeedback(data);
         setPhase("feedback");
+        void speakWordThreeTimes(data.answer.word);
       } finally {
         setBusy(false);
         submitLock.current = false;
       }
     },
-    [sessionId, current, feedback, clearTimers, stopAsr, nextWord],
+    [sessionId, current, feedback, clearTimers, stopAsr, nextWord, speakWordThreeTimes],
   );
 
   const startRealtime = useCallback(async () => {
@@ -547,42 +599,42 @@ export default function DictationPage() {
 
   if (!sessionId) {
     return (
-      <div className="space-y-6 max-w-lg">
-        <h1 className="font-display text-3xl">听写</h1>
-        <div className="panel p-6 space-y-5">
-          <p className="text-[var(--muted)] text-sm">
-            请选择本轮模式。答对叮咚后进入下一词；答错红叉仅可重试本词。
+      <div className="flex h-full max-w-lg flex-col gap-2">
+        <h1 className="font-display text-xl">听写</h1>
+        <div className="panel space-y-3 p-4">
+          <p className="text-sm text-[var(--muted)]">
+            请选择本轮模式。答对叮咚后进入下一词；答错红叉仅可重试本词，并自动朗读正解 3 遍。
           </p>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <button
               type="button"
-              className={`rounded-lg border px-4 py-4 text-left transition ${
+              className={`rounded-lg border px-3 py-3 text-left transition ${
                 selectedMode === "gloss"
                   ? "border-[var(--accent)] bg-[var(--accent-soft)]"
                   : "border-[var(--line)] hover:border-[var(--accent)]"
               }`}
               onClick={() => setSelectedMode("gloss")}
             >
-              <span className="font-display text-lg block">模式 A</span>
-              <span className="text-sm text-[var(--muted)]">中文 → 拼写朗读</span>
+              <span className="font-display block text-base">模式 A</span>
+              <span className="text-xs text-[var(--muted)]">中文 → 拼写朗读</span>
             </button>
             <button
               type="button"
-              className={`rounded-lg border px-4 py-4 text-left transition ${
+              className={`rounded-lg border px-3 py-3 text-left transition ${
                 selectedMode === "meaning"
                   ? "border-[var(--accent)] bg-[var(--accent-soft)]"
                   : "border-[var(--line)] hover:border-[var(--accent)]"
               }`}
               onClick={() => setSelectedMode("meaning")}
             >
-              <span className="font-display text-lg block">模式 B</span>
-              <span className="text-sm text-[var(--muted)]">单词 → 说中文</span>
+              <span className="font-display block text-base">模式 B</span>
+              <span className="text-xs text-[var(--muted)]">单词 → 说中文</span>
             </button>
           </div>
 
           {error && (
-            <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
+            <p className="rounded-md bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
               {error}
             </p>
           )}
@@ -621,51 +673,53 @@ export default function DictationPage() {
     );
   }
 
+  const liveSegments = mode === "meaning" ? segmentChinese(liveText) : [];
+
   return (
-    <div className="space-y-6 max-w-xl">
-      <div className="flex items-end justify-between gap-3">
-        <div>
-          <h1 className="font-display text-3xl">听写</h1>
-          <p className="text-[var(--muted)] text-sm mt-1">
-            {index + 1} / {items.length}
-            <span className="badge ml-2">
-              {mode === "gloss" ? "模式 A · 中文→拼写" : "模式 B · 单词→中文"}
-            </span>
-          </p>
-        </div>
+    <div className="flex h-full max-w-2xl flex-col gap-2">
+      <div className="flex shrink-0 items-center justify-between gap-3">
+        <h1 className="font-display text-xl">听写</h1>
+        <p className="text-[var(--muted)] text-xs">
+          {index + 1} / {items.length}
+          <span className="badge ml-2">
+            {mode === "gloss" ? "模式 A · 中文→拼写" : "模式 B · 单词→中文"}
+          </span>
+        </p>
       </div>
 
-      <div className="panel p-6 space-y-5">
+      <div className="panel flex min-h-0 flex-1 flex-col gap-2 p-3">
         {mode === "gloss" ? (
-          <div>
-            <p className="label">中文释义</p>
-            <p className="font-display text-2xl leading-snug">{current.glossZh}</p>
+          <div className="shrink-0">
+            <p className="label mb-0">中文释义</p>
+            <p className="font-display text-xl leading-snug">{current.glossZh}</p>
           </div>
         ) : (
-          <div>
-            <p className="label">单词</p>
-            <p className="font-display text-3xl tracking-wide">{current.word}</p>
+          <div className="shrink-0">
+            <p className="label mb-0">单词</p>
+            <p className="font-display text-2xl tracking-wide">{current.word}</p>
             {current.ipa && (
-              <p className="text-[var(--muted)] mt-1">{current.ipa}</p>
+              <p className="text-xs text-[var(--muted)]">{current.ipa}</p>
             )}
           </div>
         )}
 
-        {ttsNote && (
-          <p className="text-xs text-[var(--muted)] bg-[var(--chip)] rounded-md px-3 py-2">
-            {ttsNote}
-            {phase === "tts" ? " · 播报中" : ""}
-          </p>
-        )}
-        {countdown && (
-          <p className="text-sm text-[var(--accent)] bg-[var(--accent-soft)] rounded-md px-3 py-2">
-            {countdown}
-          </p>
-        )}
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {ttsNote && (
+            <span className="rounded bg-[var(--chip)] px-2 py-1 text-xs text-[var(--muted)]">
+              {ttsNote}
+              {phase === "tts" ? " · 播报中" : ""}
+            </span>
+          )}
+          {countdown && (
+            <span className="rounded bg-[var(--accent-soft)] px-2 py-1 text-xs text-[var(--accent)]">
+              {countdown}
+            </span>
+          )}
+        </div>
 
-        <section className="rounded-lg border border-[var(--line)] bg-[var(--chip)]/40 p-4 space-y-2">
+        <section className="no-scrollbar flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto rounded-lg border border-[var(--line)] bg-[var(--chip)]/40 p-2.5">
           <p className="label mb-0">实时识别（累计）</p>
-          <p className="min-h-[4.5rem] font-display text-xl leading-relaxed whitespace-pre-wrap">
+          <p className="font-display text-lg leading-snug whitespace-pre-wrap">
             {liveText ||
               (phase === "tts"
                 ? "等待播报结束…"
@@ -673,91 +727,91 @@ export default function DictationPage() {
                   ? "正在听…"
                   : "等待开录…")}
           </p>
+          {mode === "meaning" && liveSegments.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 pt-1">
+              <span className="text-xs text-[var(--muted)]">分词：</span>
+              {liveSegments.map((token, i) => (
+                <span key={`${token}-${i}`} className="badge text-xs">
+                  {token}
+                </span>
+              ))}
+            </div>
+          )}
         </section>
 
-        <section className="rounded-lg border border-[var(--line)] p-4 space-y-3">
+        <section className="shrink-0 space-y-2 rounded-lg border border-[var(--line)] p-2.5">
           <p className="label mb-0">判定区</p>
 
           {!feedback ? (
             <>
               {mode === "gloss" ? (
-                <div>
-                  <label className="label">提取拼写</label>
-                  <input
-                    className="field text-lg"
-                    value={spelling}
-                    onChange={(e) => {
-                      spellingRef.current = e.target.value;
-                      setSpelling(e.target.value);
-                    }}
-                    autoComplete="off"
-                    autoCorrect="off"
-                    spellCheck={false}
-                    disabled={phase === "tts"}
-                    readOnly={recording}
-                  />
-                </div>
+                <input
+                  className="field text-base"
+                  placeholder="提取拼写"
+                  value={spelling}
+                  onChange={(e) => {
+                    spellingRef.current = e.target.value;
+                    setSpelling(e.target.value);
+                  }}
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  disabled={phase === "tts"}
+                  readOnly={recording}
+                />
               ) : (
-                <div>
-                  <label className="label">提取中文</label>
-                  <input
-                    className="field text-lg"
-                    value={meaningText}
-                    onChange={(e) => {
-                      meaningRef.current = e.target.value;
-                      setMeaningText(e.target.value);
-                    }}
-                    autoComplete="off"
-                    disabled={phase === "tts"}
-                    readOnly={recording}
-                  />
-                </div>
+                <input
+                  className="field text-base"
+                  placeholder="提取中文"
+                  value={meaningText}
+                  onChange={(e) => {
+                    meaningRef.current = e.target.value;
+                    setMeaningText(e.target.value);
+                  }}
+                  autoComplete="off"
+                  disabled={phase === "tts"}
+                  readOnly={recording}
+                />
               )}
               {error && (
-                <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
+                <p className="rounded-md bg-[var(--danger-soft)] px-2 py-1 text-xs text-[var(--danger)]">
                   {error}
                 </p>
               )}
             </>
           ) : feedback.overallOk ? (
-            <div className="rounded-md px-4 py-6 bg-[var(--ok-soft)] text-[var(--ok)] text-center space-y-2">
-              <p className="font-display text-5xl leading-none" aria-label="正确">
-                ✓
-              </p>
-              <p className="font-display text-xl">正确</p>
-              <p className="text-sm opacity-80">
+            <div className="rounded-md bg-[var(--ok-soft)] px-3 py-2 text-center text-[var(--ok)]">
+              <span className="font-display text-lg">✓ 正确</span>
+              <span className="ml-2 text-xs opacity-80">
                 {(feedback.mode || mode) === "meaning"
                   ? feedback.extractedMeaning || meaningText
                   : feedback.extractedSpelling || spelling}
-              </p>
+              </span>
             </div>
           ) : (
-            <div className="space-y-4">
-              <div className="rounded-md px-4 py-6 bg-[var(--danger-soft)] text-[var(--danger)] text-center space-y-2">
-                <p className="font-display text-5xl leading-none" aria-label="错误">
-                  ✗
-                </p>
-                <p className="font-display text-xl">错误</p>
-                <p className="text-sm opacity-90">
+            <div className="space-y-2">
+              <div className="rounded-md bg-[var(--danger-soft)] px-3 py-1.5 text-center text-sm text-[var(--danger)]">
+                <span className="font-display text-lg">✗ 错误</span>
+                <span className="ml-2 opacity-90">
                   你的：
                   {(feedback.mode || mode) === "meaning"
                     ? feedback.extractedMeaning || meaningText || feedback.asrTranscript || "—"
                     : feedback.extractedSpelling || spelling || "—"}
-                </p>
+                </span>
                 {(feedback.mode || mode) === "gloss" && (
-                  <p className="text-xs opacity-80">
+                  <span className="ml-2 text-xs opacity-80">
                     拼写 {feedback.spellingOk ? "✓" : "✗"} · 读音{" "}
                     {feedback.pronunciationOk ? "✓" : "✗"}
-                  </p>
+                  </span>
                 )}
               </div>
-              <p className="text-sm text-[var(--muted)] text-center">
-                正解：<strong className="text-[var(--ink)]">{feedback.answer.word}</strong>
-                {feedback.answer.glossZh ? ` · ${feedback.answer.glossZh}` : ""}
-              </p>
-              <button type="button" className="btn-primary w-full" onClick={retryCurrent}>
-                重试本词
-              </button>
+              <AnswerCard answer={feedback.answer} />
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-[var(--muted)]">正解已朗读 3 遍</p>
+                <button type="button" className="btn-primary" onClick={retryCurrent}>
+                  重试本词
+                </button>
+              </div>
             </div>
           )}
         </section>

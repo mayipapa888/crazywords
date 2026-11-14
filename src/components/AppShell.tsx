@@ -17,10 +17,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-[var(--line)] bg-[var(--panel)]/80 backdrop-blur-md sticky top-0 z-40">
-        <div className="mx-auto max-w-5xl px-4 py-3 flex items-center justify-between gap-4">
-          <Link href="/" className="font-display text-xl tracking-tight text-[var(--ink)]">
+    <div className="flex h-full flex-col overflow-hidden">
+      <header className="shrink-0 border-b border-[var(--line)] bg-[var(--panel)]/80 backdrop-blur-md z-40">
+        <div className="mx-auto max-w-5xl px-4 py-2 flex items-center justify-between gap-4">
+          <Link href="/" className="font-display text-lg tracking-tight text-[var(--ink)]">
             CrazyWords
           </Link>
           <nav className="flex flex-wrap gap-1 text-sm">
@@ -33,7 +33,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link
                   key={item.href}
                   href={item.href}
-                  className={`px-2.5 py-1.5 rounded-md transition-colors ${
+                  className={`px-2.5 py-1 rounded-md transition-colors ${
                     active
                       ? "bg-[var(--ink)] text-[var(--paper)]"
                       : "text-[var(--muted)] hover:text-[var(--ink)] hover:bg-[var(--chip)]"
@@ -46,7 +46,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         </div>
       </header>
-      <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
+      <main className="no-scrollbar mx-auto w-full max-w-5xl flex-1 min-h-0 overflow-y-auto px-4 py-3">
+        {children}
+      </main>
     </div>
   );
 }

@@ -149,10 +149,10 @@ export default function LookupPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-xl">
-      <div>
-        <h1 className="font-display text-3xl">语音查词</h1>
-        <p className="text-[var(--muted)] mt-1">
+    <div className="flex h-full flex-col gap-2">
+      <div className="shrink-0">
+        <h1 className="font-display text-xl">语音查词</h1>
+        <p className="text-xs text-[var(--muted)] mt-0.5">
           实时识别写入下方输入框，可改后再查询。支持中文或英文；先查本地词表，没有再外网补全。
         </p>
       </div>
@@ -160,11 +160,11 @@ export default function LookupPage() {
       {!micOk ? (
         <MicGate title="查词需要麦克风" onGranted={() => setMicOk(true)} />
       ) : (
-        <div className="panel p-6 space-y-4">
-          <div>
-            <label className="label">查询（可编辑）</label>
+        <div className="panel p-3 space-y-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="label shrink-0 mb-0">查询（可编辑）</label>
             <input
-              className="field text-lg"
+              className="field flex-1 min-w-[10rem] text-sm"
               value={text}
               onChange={(e) => {
                 textRef.current = e.target.value;
@@ -175,20 +175,28 @@ export default function LookupPage() {
                 if (e.key === "Enter") void runLookup(text);
               }}
             />
-          </div>
-          <div className="flex flex-wrap gap-2">
             {!recording ? (
-              <button type="button" className="btn-secondary" disabled={busy} onClick={() => void startVoice()}>
+              <button
+                type="button"
+                className="btn-secondary text-sm shrink-0"
+                disabled={busy}
+                onClick={() => void startVoice()}
+              >
                 开始语音识别
               </button>
             ) : (
-              <button type="button" className="btn-accent" disabled={busy} onClick={() => void stopVoice()}>
+              <button
+                type="button"
+                className="btn-accent text-sm shrink-0"
+                disabled={busy}
+                onClick={() => void stopVoice()}
+              >
                 停止识别
               </button>
             )}
             <button
               type="button"
-              className="btn-primary"
+              className="btn-primary text-sm shrink-0"
               disabled={busy || !text.trim()}
               onClick={() => void runLookup(text)}
             >
@@ -199,19 +207,19 @@ export default function LookupPage() {
             <p className="text-xs text-[var(--accent)]">实时识别中…可随时改字后点「确定查询」</p>
           )}
           {error && (
-            <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
+            <p className="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-2 py-1 rounded-md">
               {error}
             </p>
           )}
           {addMsg && (
-            <p className="text-sm text-[var(--ok)] bg-[var(--ok-soft)] px-3 py-2 rounded-md">{addMsg}</p>
+            <p className="text-xs text-[var(--ok)] bg-[var(--ok-soft)] px-2 py-1 rounded-md">{addMsg}</p>
           )}
         </div>
       )}
 
       {result && (
-        <div className="panel p-6 space-y-3">
-          <p className="text-sm text-[var(--muted)]">
+        <div className="panel p-3 space-y-2 min-h-0 flex-1 overflow-y-auto no-scrollbar">
+          <p className="text-xs text-[var(--muted)]">
             查询「{result.query}」
             {result.source === "local"
               ? " · 本地词表"
@@ -224,37 +232,37 @@ export default function LookupPage() {
             <p className="text-xs text-[var(--muted)]">{result.warnings.join("；")}</p>
           ) : null}
           {!result.found || !result.entry ? (
-            <p className="font-display text-xl">{result.message || "未找到"}</p>
+            <p className="font-display text-lg">{result.message || "未找到"}</p>
           ) : (
             <>
-              <p className="font-display text-3xl">
+              <p className="font-display text-xl">
                 {result.entry.word}
                 {result.entry.pos && (
-                  <span className="text-base text-[var(--muted)] ml-2">{result.entry.pos}</span>
+                  <span className="text-xs text-[var(--muted)] ml-2">{result.entry.pos}</span>
                 )}
               </p>
-              {result.entry.ipa && <p className="text-[var(--muted)]">{result.entry.ipa}</p>}
-              <p className="text-lg">{result.entry.glossZh}</p>
+              {result.entry.ipa && <p className="text-xs text-[var(--muted)]">{result.entry.ipa}</p>}
+              <p className="text-sm">{result.entry.glossZh}</p>
               {result.entry.example && (
-                <p className="text-sm text-[var(--muted)] border-l-2 border-[var(--teal)] pl-3">
+                <p className="text-xs text-[var(--muted)] border-l-2 border-[var(--teal)] pl-2">
                   {result.entry.example}
                 </p>
               )}
               {result.entry.phrases?.length > 0 && (
-                <p className="text-sm">
+                <p className="text-xs">
                   <span className="text-[var(--muted)]">词组：</span>
                   {result.entry.phrases.join(" · ")}
                 </p>
               )}
               {result.entry.related?.length > 0 && (
-                <p className="text-sm">
+                <p className="text-xs">
                   <span className="text-[var(--muted)]">相关：</span>
                   {result.entry.related.join(" · ")}
                 </p>
               )}
               <button
                 type="button"
-                className="btn-primary w-full mt-2"
+                className="btn-primary w-full text-sm mt-1"
                 disabled={busy}
                 onClick={() => void addToList()}
               >

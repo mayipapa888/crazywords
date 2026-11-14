@@ -66,111 +66,133 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6 max-w-lg">
-      <div>
-        <h1 className="font-display text-3xl">设置</h1>
-        <p className="text-[var(--muted)] mt-1">每日目标、出题模式与听写自动计时。</p>
+    <div className="flex h-full flex-col gap-2">
+      <div className="shrink-0">
+        <h1 className="font-display text-xl">设置</h1>
+        <p className="mt-0.5 text-sm text-[var(--muted)]">
+          每日目标、出题模式与听写自动计时。
+        </p>
       </div>
 
-      <form onSubmit={save} className="panel p-6 space-y-5">
-        <div>
-          <label className="label">每日目标 N</label>
-          <input
-            type="number"
-            min={1}
-            max={200}
-            className="field"
-            value={goal}
-            onChange={(e) => setGoal(Number(e.target.value) || 1)}
-          />
-        </div>
-        <label className="flex items-start gap-3 cursor-pointer">
-          <input
-            type="checkbox"
-            className="mt-1"
-            checked={cloze}
-            onChange={(e) => setCloze(e.target.checked)}
-          />
-          <span>
-            <span className="font-medium block">（兼容）队列含模式 B 标记</span>
-            <span className="text-sm text-[var(--muted)]">
-              听写模式请在「听写」页用按钮点选。此开关仅保留字段{" "}
-              <code className="bg-[var(--chip)] px-1 rounded">clozeEnabled</code>
-              ，不再作为进场切换方式。
+      <form
+        id="settings-form"
+        onSubmit={save}
+        className="no-scrollbar panel flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3"
+      >
+        <div className="grid shrink-0 gap-2 sm:grid-cols-3">
+          <div>
+            <label className="label">每日目标 N</label>
+            <input
+              type="number"
+              min={1}
+              max={200}
+              className="field py-1.5"
+              value={goal}
+              onChange={(e) => setGoal(Number(e.target.value) || 1)}
+            />
+          </div>
+          <label className="flex cursor-pointer items-start gap-2 sm:col-span-2">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={cloze}
+              onChange={(e) => setCloze(e.target.checked)}
+            />
+            <span>
+              <span className="block text-sm font-medium">（兼容）队列含模式 B 标记</span>
+              <span className="text-xs text-[var(--muted)]">
+                听写模式请在「听写」页用按钮点选。此开关仅保留字段{" "}
+                <code className="rounded bg-[var(--chip)] px-1">clozeEnabled</code>
+                ，不再作为进场切换方式。
+              </span>
             </span>
-          </span>
-        </label>
+          </label>
+        </div>
 
-        <div className="border-t border-[var(--line)] pt-4 space-y-4">
-          <p className="font-medium">实时听写计时（秒）</p>
-          <div>
-            <label className="label">自动开始录音（模式 A：TTS 结束后）</label>
-            <input
-              type="number"
-              min={1}
-              max={300}
-              className="field"
-              value={autoStart}
-              onChange={(e) => setAutoStart(Number(e.target.value) || 10)}
-            />
-            <p className="text-xs text-[var(--muted)] mt-1">
-              默认 10。计时从释义播报结束起算；模式 B 播报后直接开录。
-            </p>
-          </div>
-          <div>
-            <label className="label">自动提交（开录后）</label>
-            <input
-              type="number"
-              min={1}
-              max={300}
-              className="field"
-              value={autoSubmit}
-              onChange={(e) => setAutoSubmit(Number(e.target.value) || 15)}
-            />
-            <p className="text-xs text-[var(--muted)] mt-1">默认 15</p>
-          </div>
-          <div>
-            <label className="label">自动下一词（反馈后）</label>
-            <input
-              type="number"
-              min={1}
-              max={300}
-              className="field"
-              value={autoNext}
-              onChange={(e) => setAutoNext(Number(e.target.value) || 30)}
-            />
-            <p className="text-xs text-[var(--muted)] mt-1">默认 30</p>
+        <div className="shrink-0 border-t border-[var(--line)] pt-2">
+          <p className="mb-1 text-sm font-medium">实时听写计时（秒）</p>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <div>
+              <label className="label">自动开始录音（模式 A：TTS 结束后）</label>
+              <input
+                type="number"
+                min={1}
+                max={300}
+                className="field py-1.5"
+                value={autoStart}
+                onChange={(e) => setAutoStart(Number(e.target.value) || 10)}
+              />
+              <p className="mt-0.5 text-xs text-[var(--muted)]">
+                默认 10。计时从释义播报结束起算；模式 B 播报后直接开录。
+              </p>
+            </div>
+            <div>
+              <label className="label">自动提交（开录后）</label>
+              <input
+                type="number"
+                min={1}
+                max={300}
+                className="field py-1.5"
+                value={autoSubmit}
+                onChange={(e) => setAutoSubmit(Number(e.target.value) || 15)}
+              />
+              <p className="mt-0.5 text-xs text-[var(--muted)]">默认 15</p>
+            </div>
+            <div>
+              <label className="label">自动下一词（反馈后）</label>
+              <input
+                type="number"
+                min={1}
+                max={300}
+                className="field py-1.5"
+                value={autoNext}
+                onChange={(e) => setAutoNext(Number(e.target.value) || 30)}
+              />
+              <p className="mt-0.5 text-xs text-[var(--muted)]">默认 30</p>
+            </div>
           </div>
         </div>
 
-        <button type="submit" className="btn-primary" disabled={busy}>
+        <div className="panel mt-auto shrink-0 p-3 text-xs text-[var(--muted)]">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-medium text-[var(--ink)]">语音服务（服务端环境变量）</span>
+            {speech ? (
+              <>
+                <span>
+                  提供方：
+                  <strong className="text-[var(--ink)]">{speech.provider || "—"}</strong>
+                </span>
+                <span className={`badge ${speech.ready ? "badge-ok" : "badge-warn"}`}>
+                  {speech.ready ? "就绪" : "未就绪"}
+                </span>
+                <span>ASR 密钥：{speech.asrConfigured ? "已配置" : "缺失"}</span>
+                <span>TTS 密钥：{speech.ttsConfigured ? "已配置" : "缺失"}</span>
+                {speech.nlsRegion && <span>地域：{speech.nlsRegion}</span>}
+                <span>{speech.note || speech.error}</span>
+              </>
+            ) : (
+              <span>读取中…</span>
+            )}
+          </div>
+          <p className="mt-1 leading-snug">
+            生产：<code className="rounded bg-[var(--chip)] px-1">SPEECH_PROVIDER=aliyun</code>{" "}
+            + <code className="rounded bg-[var(--chip)] px-1">ASR_*</code> /{" "}
+            <code className="rounded bg-[var(--chip)] px-1">TTS_*</code>
+            ；开通「实时语音识别」与「语音合成」。缺密钥会报错，不会静默 mock。
+          </p>
+        </div>
+      </form>
+
+      <div className="flex shrink-0 items-center gap-3">
+        <button
+          type="submit"
+          form="settings-form"
+          className="btn-primary py-1.5"
+          disabled={busy}
+        >
           {busy ? "保存中…" : "保存设置"}
         </button>
         {msg && <p className="text-sm text-[var(--teal)]">{msg}</p>}
-      </form>
-
-      <div className="panel p-5 text-sm text-[var(--muted)] space-y-2">
-        <p className="font-medium text-[var(--ink)]">语音服务（服务端环境变量）</p>
-        {speech ? (
-          <ul className="space-y-1">
-            <li>
-              提供方：<strong className="text-[var(--ink)]">{speech.provider || "—"}</strong>
-              {speech.ready ? " · 就绪" : " · 未就绪"}
-            </li>
-            <li>ASR 密钥：{speech.asrConfigured ? "已配置" : "缺失"}</li>
-            <li>TTS 密钥：{speech.ttsConfigured ? "已配置" : "缺失"}</li>
-            {speech.nlsRegion && <li>地域：{speech.nlsRegion}</li>}
-            <li>{speech.note || speech.error}</li>
-          </ul>
-        ) : (
-          <p>读取中…</p>
-        )}
-        <p>
-          生产：<code className="bg-[var(--chip)] px-1 rounded">SPEECH_PROVIDER=aliyun</code>{" "}
-          + <code className="bg-[var(--chip)] px-1 rounded">ASR_*</code> /{" "}
-          <code className="bg-[var(--chip)] px-1 rounded">TTS_*</code>
-          ；开通「实时语音识别」与「语音合成」。缺密钥会报错，不会静默 mock。
-        </p>
       </div>
     </div>
   );

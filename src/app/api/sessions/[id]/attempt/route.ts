@@ -13,6 +13,19 @@ import { applyGrade } from "@/lib/srs/schedule";
 
 type DictationMode = "gloss" | "meaning";
 
+/** WordEntry.phrases / related 以 JSON 字符串存储，正解展示需要还原成数组 */
+function parseStringArray(raw: string | null | undefined): string[] {
+  try {
+    const value = JSON.parse(raw || "[]");
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => String(item).trim())
+      .filter((item) => item !== "");
+  } catch {
+    return [];
+  }
+}
+
 function parseMode(raw: unknown): DictationMode {
   const s = String(raw || "gloss");
   if (s === "meaning" || s === "cloze") return "meaning"; // cloze 旧值兼容 → 模式 B
@@ -234,6 +247,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           ipa: entry.ipa,
           pos: entry.pos,
           example: entry.example,
+          phrases: parseStringArray(entry.phrases),
+          related: parseStringArray(entry.related),
         },
       },
       auth,
