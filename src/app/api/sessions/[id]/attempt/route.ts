@@ -24,6 +24,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     let spellingInput = "";
     let audio: Buffer | null = null;
     let skipAsr = false;
+    let realtimeTranscript: string | null = null;
 
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
@@ -31,6 +32,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       mode = String(form.get("mode") || "gloss") === "cloze" ? "cloze" : "gloss";
       spellingInput = String(form.get("spellingInput") || "");
       skipAsr = String(form.get("skipAsr") || "") === "1";
+      if (form.get("realtimeTranscript")) {
+        realtimeTranscript = String(form.get("realtimeTranscript"));
+      }
       const file = form.get("audio");
       if (file && file instanceof File) {
         assertByteLimit(file.size, MAX_AUDIO_BYTES, "录音");
@@ -42,6 +46,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       mode = body.mode === "cloze" ? "cloze" : "gloss";
       spellingInput = body.spellingInput || "";
       skipAsr = Boolean(body.skipAsr);
+      if (body.realtimeTranscript != null) {
+        realtimeTranscript = String(body.realtimeTranscript);
+      }
       if (body.audioBase64) {
         audio = bufferFromBase64(String(body.audioBase64), MAX_AUDIO_BYTES, "录音");
       }
@@ -69,20 +76,35 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       );
     }
 
-    if (!audio || audio.length === 0) {
+    let asrTranscript: string | null = null;
+    let asrProvider = "unknown";
+
+    if (realtimeTranscript != null && realtimeTranscript.trim() !== "") {
+      // 实时识别路径：使用浏览器 WebSocket 会话产生的转写（仍要求有麦、有识别文本）
+      asrTranscript = realtimeTranscript.trim();
+      asrProvider =
+        (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "aliyun"
+          ? "aliyun-realtime"
+          : "mock-realtime";
+    } else if (audio && audio.length > 0) {
+      const asr = getAsrProvider();
+      const useHint = (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "mock";
+      const asrResult = await asr.recognize(audio, {
+        language: "en-US",
+        hint: useHint ? entry.word : undefined,
+      });
+      asrTranscript = asrResult.text;
+      asrProvider = asr.name;
+    } else {
       return NextResponse.json(
-        { error: "缺少录音。听写必须提交语音，无麦克风不可完成。" },
+        {
+          error:
+            "缺少语音结果。请使用实时识别，或上传录音。无麦克风不可完成听写。",
+        },
         { status: 400 },
       );
     }
 
-    const asr = getAsrProvider();
-    const useHint = (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "mock";
-    const asrResult = await asr.recognize(audio, {
-      language: "en-US",
-      hint: useHint ? entry.word : undefined,
-    });
-    const asrTranscript = asrResult.text;
     const pronunciationOk = checkPronunciation(asrTranscript, entry.word);
     const overallOk = spellingOk && pronunciationOk;
 
@@ -160,7 +182,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         pronunciationOk,
         overallOk,
         asrTranscript,
-        asrProvider: asr.name,
+        asrProvider,
         answer: {
           word: entry.word,
           glossZh: entry.glossZh,

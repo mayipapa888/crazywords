@@ -1,15 +1,5 @@
 import Papa from "papaparse";
-import { toJsonArray } from "./json";
-
-export type CsvRow = {
-  word: string;
-  gloss_zh?: string;
-  ipa?: string;
-  pos?: string;
-  example?: string;
-  phrases?: string;
-  related?: string;
-};
+import { positionalRowsToEntries } from "./table-import";
 
 export type ParsedEntry = {
   word: string;
@@ -21,49 +11,23 @@ export type ParsedEntry = {
   related: string;
 };
 
-function splitPipe(raw?: string): string[] {
-  if (!raw?.trim()) return [];
-  return raw
-    .split("|")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
-
+/**
+ * CSV：固定列序
+ * 序号,单词,音标,词性,中文释义,例句,相关词组,近义词,反义词
+ * 首行表头不导入；首列序号不导入。
+ */
 export function parseWordCsv(text: string): { entries: ParsedEntry[]; errors: string[] } {
-  const parsed = Papa.parse<Record<string, string>>(text, {
-    header: true,
+  const parsed = Papa.parse<(string | null)[]>(text, {
+    header: false,
     skipEmptyLines: true,
-    transformHeader: (h) => h.trim().toLowerCase(),
   });
 
   const errors: string[] = [...(parsed.errors || []).map((e) => e.message)];
-  const entries: ParsedEntry[] = [];
-  const seen = new Set<string>();
-
-  for (const [i, row] of (parsed.data || []).entries()) {
-    const word = (row.word || "").trim();
-    if (!word) {
-      errors.push(`第 ${i + 2} 行缺少 word`);
-      continue;
-    }
-    const key = word.toLowerCase();
-    // 同文件内后行覆盖前行
-    if (seen.has(key)) {
-      const idx = entries.findIndex((e) => e.word.toLowerCase() === key);
-      if (idx >= 0) entries.splice(idx, 1);
-    }
-    seen.add(key);
-
-    entries.push({
-      word,
-      glossZh: row.gloss_zh?.trim() || null,
-      ipa: row.ipa?.trim() || null,
-      pos: row.pos?.trim() || null,
-      example: row.example?.trim() || null,
-      phrases: toJsonArray(splitPipe(row.phrases)),
-      related: toJsonArray(splitPipe(row.related)),
-    });
+  const rows = (parsed.data || []).map((r) => (Array.isArray(r) ? r : []));
+  if (rows.length === 0) {
+    return { entries: [], errors: [...errors, "CSV 为空"] };
   }
 
-  return { entries, errors };
+  const { entries, errors: rowErrors } = positionalRowsToEntries(rows);
+  return { entries, errors: [...errors, ...rowErrors] };
 }

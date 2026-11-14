@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MicGate } from "@/components/MicGate";
-import { MicRecorder } from "@/lib/mic";
+import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
+import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
 type QueueItem = {
   entryId: string;
@@ -28,6 +29,12 @@ type Feedback = {
   };
 };
 
+type Timers = {
+  autoSubmitSeconds: number;
+  autoStartRecordSeconds: number;
+  autoNextWordSeconds: number;
+};
+
 function clozeText(example: string, word: string) {
   const re = new RegExp(word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "ig");
   return example.replace(re, "______");
@@ -39,15 +46,39 @@ export default function DictationPage() {
   const [items, setItems] = useState<QueueItem[]>([]);
   const [index, setIndex] = useState(0);
   const [spelling, setSpelling] = useState("");
+  const [liveText, setLiveText] = useState("");
   const [recording, setRecording] = useState(false);
-  const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [recorder] = useState(() => new MicRecorder());
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ttsNote, setTtsNote] = useState<string | null>(null);
+  const [timers, setTimers] = useState<Timers>({
+    autoSubmitSeconds: 15,
+    autoStartRecordSeconds: 10,
+    autoNextWordSeconds: 30,
+  });
+  const [countdown, setCountdown] = useState<string | null>(null);
+
+  const asrRef = useRef<RealtimeAsrSession | null>(null);
+  const submitLock = useRef(false);
+  const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tickTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const current = items[index];
+
+  const clearTimers = useCallback(() => {
+    if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
+    if (autoSubmitTimer.current) clearTimeout(autoSubmitTimer.current);
+    if (autoNextTimer.current) clearTimeout(autoNextTimer.current);
+    if (tickTimer.current) clearInterval(tickTimer.current);
+    autoStartTimer.current = null;
+    autoSubmitTimer.current = null;
+    autoNextTimer.current = null;
+    tickTimer.current = null;
+    setCountdown(null);
+  }, []);
 
   const speakPrompt = useCallback(async (item: QueueItem) => {
     const text =
@@ -63,7 +94,7 @@ export default function DictationPage() {
       const data = await res.json();
       setTtsNote(
         data.mock
-          ? `TTS mock（${data.provider}）：${data.spokenText}`
+          ? `TTS mock（${data.provider}）`
           : `TTS（${data.provider}）`,
       );
       if (data.audioBase64) {
@@ -71,7 +102,6 @@ export default function DictationPage() {
         const audio = new Audio(src);
         void audio.play().catch(() => undefined);
       } else if (data.mock && typeof window !== "undefined" && window.speechSynthesis) {
-        // 仅 mock：浏览器合成作开发提示；生产主 TTS 为阿里云
         const u = new SpeechSynthesisUtterance(text);
         u.lang = "zh-CN";
         window.speechSynthesis.cancel();
@@ -88,93 +118,207 @@ export default function DictationPage() {
     setFeedback(null);
     setIndex(0);
     setSpelling("");
-    setAudioBlob(null);
+    setLiveText("");
     try {
-      const res = await fetch("/api/sessions", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) {
+      const [meRes, sessRes] = await Promise.all([
+        fetch("/api/me"),
+        fetch("/api/sessions", { method: "POST" }),
+      ]);
+      const me = await meRes.json();
+      const data = await sessRes.json();
+      if (meRes.ok) {
+        setTimers({
+          autoSubmitSeconds: me.autoSubmitSeconds ?? 15,
+          autoStartRecordSeconds: me.autoStartRecordSeconds ?? 10,
+          autoNextWordSeconds: me.autoNextWordSeconds ?? 30,
+        });
+      }
+      if (!sessRes.ok) {
         setError(data.error || "无法开始会话");
         return;
       }
       setSessionId(data.sessionId);
       setItems(data.items || []);
-      if (data.items?.[0]) speakPrompt(data.items[0]);
+      if (data.items?.[0]) void speakPrompt(data.items[0]);
     } finally {
       setBusy(false);
     }
   }
 
-  useEffect(() => {
-    return () => recorder.cleanup();
-  }, [recorder]);
+  const stopAsr = useCallback(async () => {
+    const s = asrRef.current;
+    asrRef.current = null;
+    if (s) await s.stop().catch(() => undefined);
+    setRecording(false);
+  }, []);
 
-  async function toggleRecord() {
-    setError(null);
-    if (!recording) {
+  const submitAttempt = useCallback(
+    async (transcriptOverride?: string) => {
+      if (!sessionId || !current || submitLock.current || feedback) return;
+      submitLock.current = true;
+      setBusy(true);
+      setError(null);
+      clearTimers();
       try {
-        await recorder.start();
-        setRecording(true);
-        setAudioBlob(null);
-      } catch {
-        setError("无法开始录音。请检查麦克风权限。");
-        setMicOk(false);
+        await stopAsr();
+        const transcript =
+          transcriptOverride ??
+          liveText ??
+          asrRef.current?.transcript ??
+          "";
+        const lemma =
+          spelling.trim() ||
+          extractLemmaFromTranscript(transcript, current.word);
+        if (!transcript.trim() && !lemma) {
+          setError("未获得识别文本。请开口朗读，或检查麦克风 / 实时识别配置。");
+          return;
+        }
+        const res = await fetch(`/api/sessions/${sessionId}/attempt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            entryId: current.entryId,
+            mode: current.mode,
+            spellingInput: lemma,
+            realtimeTranscript: transcript || lemma,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || "提交失败");
+          return;
+        }
+        setFeedback(data);
+        setSpelling(lemma);
+      } finally {
+        setBusy(false);
+        submitLock.current = false;
       }
-      return;
-    }
-    try {
-      const blob = await recorder.stop();
-      setAudioBlob(blob);
-      setRecording(false);
-    } catch {
-      setError("录音结束失败");
-      setRecording(false);
-    }
-  }
+    },
+    [sessionId, current, feedback, liveText, spelling, clearTimers, stopAsr],
+  );
 
-  async function submit() {
-    if (!sessionId || !current) return;
-    if (!audioBlob) {
-      setError("请先录音。听写必须提交语音，不能仅拼写。");
-      return;
-    }
-    setBusy(true);
+  const startRealtime = useCallback(async () => {
+    if (!current || recording || feedback) return;
     setError(null);
+    setLiveText("");
     try {
-      const form = new FormData();
-      form.append("entryId", current.entryId);
-      form.append("mode", current.mode);
-      form.append("spellingInput", spelling);
-      form.append("audio", audioBlob, "utterance.webm");
-      const res = await fetch(`/api/sessions/${sessionId}/attempt`, {
-        method: "POST",
-        body: form,
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "提交失败");
-        return;
-      }
-      setFeedback(data);
-    } finally {
-      setBusy(false);
+      const session = new RealtimeAsrSession(
+        {
+          onPartial: (t) => {
+            setLiveText(t);
+            const lemma = extractLemmaFromTranscript(t, current.word);
+            if (lemma) setSpelling(lemma);
+          },
+          onFinal: (t) => {
+            setLiveText(t);
+            const lemma = extractLemmaFromTranscript(t, current.word);
+            if (lemma) setSpelling(lemma);
+          },
+          onError: (e) => setError(e.message),
+        },
+        current.word,
+      );
+      asrRef.current = session;
+      await session.start();
+      setRecording(true);
+      // 自动提交倒计时
+      let left = timers.autoSubmitSeconds;
+      setCountdown(`录音中，${left}s 后自动提交`);
+      tickTimer.current = setInterval(() => {
+        left -= 1;
+        if (left <= 0) {
+          if (tickTimer.current) clearInterval(tickTimer.current);
+          setCountdown(null);
+        } else {
+          setCountdown(`录音中，${left}s 后自动提交`);
+        }
+      }, 1000);
+      autoSubmitTimer.current = setTimeout(() => {
+        void submitAttempt();
+      }, timers.autoSubmitSeconds * 1000);
+    } catch (e) {
+      setRecording(false);
+      setMicOk(false);
+      setError(e instanceof Error ? e.message : "无法开始实时识别");
     }
-  }
+  }, [current, recording, feedback, timers.autoSubmitSeconds, submitAttempt]);
+
+  // 进入新题：自动开始录音倒计时
+  useEffect(() => {
+    if (!sessionId || !current || feedback || index >= items.length) return;
+    clearTimers();
+    setLiveText("");
+    setSpelling("");
+    submitLock.current = false;
+
+    let left = timers.autoStartRecordSeconds;
+    setCountdown(`${left}s 后自动开始录音`);
+    tickTimer.current = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        if (tickTimer.current) clearInterval(tickTimer.current);
+        setCountdown(null);
+      } else {
+        setCountdown(`${left}s 后自动开始录音`);
+      }
+    }, 1000);
+
+    autoStartTimer.current = setTimeout(() => {
+      void startRealtime();
+    }, timers.autoStartRecordSeconds * 1000);
+
+    return () => {
+      clearTimers();
+      void stopAsr();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, index, current?.entryId]);
+
+  // 反馈后自动下一词
+  useEffect(() => {
+    if (!feedback) return;
+    let left = timers.autoNextWordSeconds;
+    setCountdown(`${left}s 后自动下一词`);
+    tickTimer.current = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        if (tickTimer.current) clearInterval(tickTimer.current);
+        setCountdown(null);
+      } else {
+        setCountdown(`${left}s 后自动下一词`);
+      }
+    }, 1000);
+    autoNextTimer.current = setTimeout(() => {
+      nextWord();
+    }, timers.autoNextWordSeconds * 1000);
+    return () => clearTimers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [feedback]);
 
   function nextWord() {
+    clearTimers();
     setFeedback(null);
     setSpelling("");
-    setAudioBlob(null);
+    setLiveText("");
     const next = index + 1;
     if (next >= items.length) {
       if (sessionId) {
-        fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+        void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
       }
       setIndex(next);
       return;
     }
     setIndex(next);
-    speakPrompt(items[next]);
+    void speakPrompt(items[next]);
   }
+
+  useEffect(() => {
+    return () => {
+      clearTimers();
+      void stopAsr();
+    };
+  }, [clearTimers, stopAsr]);
 
   if (!micOk) {
     return (
@@ -191,7 +335,7 @@ export default function DictationPage() {
         <h1 className="font-display text-3xl">听写</h1>
         <div className="panel p-6 space-y-4">
           <p className="text-[var(--muted)]">
-            麦克风已就绪。将按今日队列进行释义拼写 / 例句挖空（挖空可在设置关闭）。
+            麦克风已就绪。将使用<strong>实时语音识别</strong>边说边显示；可在设置中调整自动开录 / 提交 / 下一词秒数。
           </p>
           {error && (
             <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
@@ -210,7 +354,7 @@ export default function DictationPage() {
     return (
       <div className="panel p-8 max-w-lg space-y-4">
         <h1 className="font-display text-3xl">本轮完成</h1>
-        <p className="text-[var(--muted)]">共完成 {items.length} 词。错词已进入错词本，正确词已推进 SRS。</p>
+        <p className="text-[var(--muted)]">共完成 {items.length} 词。</p>
         <button
           type="button"
           className="btn-primary"
@@ -236,9 +380,7 @@ export default function DictationPage() {
             <span className="badge ml-2">
               {current.mode === "gloss" ? "释义拼写" : "例句挖空"}
             </span>
-            <span className="badge ml-1">
-              {current.reason === "due" ? "到期" : current.reason === "wrong" ? "错词" : "新词"}
-            </span>
+            <span className="badge ml-1">实时识别</span>
           </p>
         </div>
       </div>
@@ -268,11 +410,22 @@ export default function DictationPage() {
             {ttsNote}
           </p>
         )}
+        {countdown && (
+          <p className="text-sm text-[var(--accent)] bg-[var(--accent-soft)] rounded-md px-3 py-2">
+            {countdown}
+          </p>
+        )}
 
         {!feedback ? (
           <>
             <div>
-              <label className="label">拼写</label>
+              <label className="label">实时识别</label>
+              <div className="field min-h-[3rem] bg-[var(--chip)] text-base">
+                {liveText || (recording ? "正在听…" : "等待开录…")}
+              </div>
+            </div>
+            <div>
+              <label className="label">自动提取拼写（可改）</label>
               <input
                 className="field text-lg"
                 value={spelling}
@@ -280,37 +433,29 @@ export default function DictationPage() {
                 autoComplete="off"
                 autoCorrect="off"
                 spellCheck={false}
-                placeholder="输入英文单词"
               />
             </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                className={recording ? "btn-accent" : "btn-secondary"}
-                onClick={toggleRecord}
-              >
-                {recording ? "停止录音" : audioBlob ? "重新录音" : "开始录音"}
-              </button>
-              {audioBlob && !recording && (
-                <span className="badge-ok badge">已录制 {(audioBlob.size / 1024).toFixed(1)} KB</span>
+            <div className="flex flex-wrap gap-2">
+              {!recording ? (
+                <button type="button" className="btn-secondary" disabled={busy} onClick={() => startRealtime()}>
+                  立即开始录音
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-accent"
+                  disabled={busy}
+                  onClick={() => void submitAttempt()}
+                >
+                  停止并提交
+                </button>
               )}
             </div>
-
             {error && (
               <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
                 {error}
               </p>
             )}
-
-            <button
-              type="button"
-              className="btn-primary w-full"
-              disabled={busy || recording}
-              onClick={submit}
-            >
-              {busy ? "判定中…" : "提交拼写 + 发音"}
-            </button>
           </>
         ) : (
           <div className="space-y-4">
@@ -326,7 +471,7 @@ export default function DictationPage() {
               </p>
               <p className="text-sm mt-1">
                 拼写 {feedback.spellingOk ? "✓" : "✗"} · 发音 {feedback.pronunciationOk ? "✓" : "✗"}
-                {feedback.asrTranscript ? `（ASR: ${feedback.asrTranscript}）` : ""}
+                {feedback.asrTranscript ? `（识别: ${feedback.asrTranscript}）` : ""}
               </p>
             </div>
             <div className="text-sm space-y-1">
@@ -337,7 +482,9 @@ export default function DictationPage() {
                   <span className="text-[var(--muted)] ml-2">{feedback.answer.ipa}</span>
                 )}
               </p>
-              {feedback.answer.glossZh && <p className="text-[var(--muted)]">{feedback.answer.glossZh}</p>}
+              {feedback.answer.glossZh && (
+                <p className="text-[var(--muted)]">{feedback.answer.glossZh}</p>
+              )}
             </div>
             <button type="button" className="btn-primary w-full" onClick={nextWord}>
               {index + 1 >= items.length ? "完成本轮" : "下一词"}

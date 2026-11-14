@@ -1,16 +1,8 @@
 import * as XLSX from "xlsx";
-import { rowsToEntries, type RowRecord } from "./table-import";
+import { IMPORT_COLUMN_LABELS, positionalRowsToEntries } from "./table-import";
 import type { ParsedEntry } from "./csv-import";
 
-export const IMPORT_HEADERS = [
-  "word",
-  "gloss_zh",
-  "ipa",
-  "pos",
-  "example",
-  "phrases",
-  "related",
-] as const;
+export const IMPORT_HEADERS = IMPORT_COLUMN_LABELS;
 
 export function parseWordExcel(buffer: Buffer): { entries: ParsedEntry[]; errors: string[] } {
   let workbook: XLSX.WorkBook;
@@ -28,39 +20,46 @@ export function parseWordExcel(buffer: Buffer): { entries: ParsedEntry[]; errors
     return { entries: [], errors: ["Excel 无工作表"] };
   }
   const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json<RowRecord>(sheet, {
+  const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(sheet, {
+    header: 1,
     defval: "",
     raw: false,
   });
   if (rows.length === 0) {
     return { entries: [], errors: ["Excel 无数据行（请保留表头）"] };
   }
-  return rowsToEntries(rows);
+  return positionalRowsToEntries(rows);
 }
 
-/** 生成导入模板（表头 + 样例行） */
+/** 生成导入模板（中文表头 + 样例；含序号列） */
 export function buildImportTemplateBuffer(): Buffer {
+  const header = [...IMPORT_COLUMN_LABELS];
   const samples = [
-    {
-      word: "abandon",
-      gloss_zh: "放弃；遗弃",
-      ipa: "/əˈbændən/",
-      pos: "v.",
-      example: "They had to abandon the project.",
-      phrases: "abandon hope",
-      related: "desert|forsake",
-    },
-    {
-      word: "benefit",
-      gloss_zh: "益处；使受益",
-      ipa: "/ˈbenɪfɪt/",
-      pos: "n./v.",
-      example: "Exercise can benefit your health.",
-      phrases: "benefit from",
-      related: "advantage",
-    },
+    header,
+    [
+      1,
+      "abandon",
+      "/əˈbændən/",
+      "v.",
+      "放弃；遗弃",
+      "They had to abandon the project.",
+      "abandon hope",
+      "desert|forsake",
+      "keep",
+    ],
+    [
+      2,
+      "benefit",
+      "/ˈbenɪfɪt/",
+      "n./v.",
+      "益处；使受益",
+      "Exercise can benefit your health.",
+      "benefit from",
+      "advantage",
+      "harm",
+    ],
   ];
-  const sheet = XLSX.utils.json_to_sheet(samples, { header: [...IMPORT_HEADERS] });
+  const sheet = XLSX.utils.aoa_to_sheet(samples);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheet, "words");
   return Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));

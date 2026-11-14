@@ -207,11 +207,11 @@ export default function ImportPage() {
       <div>
         <h1 className="font-display text-3xl">导入词表</h1>
         <p className="text-[var(--muted)] mt-1">
-          支持 CSV / Excel 批量导入、单条手工录入与语音输入。表头：
+          支持 CSV / Excel 批量导入、单条手工录入与语音输入。固定列序：
           <code className="text-xs bg-[var(--chip)] px-1 rounded ml-1">
-            word,gloss_zh,ipa,pos,example,phrases,related
+            序号,单词,音标,词性,中文释义,例句,相关词组,近义词,反义词
           </code>
-          。同词<strong>覆盖</strong>。
+          （<strong>首行表头不导入</strong>、<strong>首列序号不导入</strong>；近/反义词写入 related）。同词<strong>覆盖</strong>。
         </p>
       </div>
 

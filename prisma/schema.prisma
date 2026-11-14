@@ -10,12 +10,18 @@ datasource db {
 }
 
 model User {
-  id                 String   @id @default(cuid())
-  sessionKey         String?  @unique // httpOnly cookie 绑定的会话用户
-  locale             String   @default("zh-CN")
-  dailyGoalDefault   Int      @default(20)
-  clozeEnabled       Boolean  @default(true)
-  createdAt          DateTime @default(now())
+  id                     String   @id @default(cuid())
+  sessionKey             String?  @unique // httpOnly cookie 绑定的会话用户
+  locale                 String   @default("zh-CN")
+  dailyGoalDefault       Int      @default(20)
+  clozeEnabled           Boolean  @default(true)
+  /// 听写：录音开始后自动提交秒数
+  autoSubmitSeconds      Int      @default(15)
+  /// 听写：进入题目后自动开始录音秒数
+  autoStartRecordSeconds Int      @default(10)
+  /// 听写：反馈后自动下一词秒数
+  autoNextWordSeconds    Int      @default(30)
+  createdAt              DateTime @default(now())
 
   wordLists      WordList[]
   cardStates     CardState[]
