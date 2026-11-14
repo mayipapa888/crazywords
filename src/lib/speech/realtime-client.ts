@@ -72,6 +72,10 @@ export class RealtimeAsrSession {
   private running = false;
   private mockTimer: ReturnType<typeof setInterval> | null = null;
   private lastText = "";
+  /** 已确认句子累计（SentenceEnd） */
+  private committed = "";
+  /** 当前句中间结果 */
+  private interim = "";
 
   constructor(handlers: RealtimeAsrHandlers, options?: RealtimeAsrOptions | string) {
     this.handlers = handlers;
@@ -86,6 +90,16 @@ export class RealtimeAsrSession {
 
   get transcript() {
     return this.lastText;
+  }
+
+  private publishText(text: string, finalSentence = false) {
+    this.lastText = text;
+    this.handlers.onPartial?.(text);
+    if (finalSentence) this.handlers.onFinal?.(text);
+  }
+
+  private combineDisplay() {
+    return [this.committed, this.interim].filter((s) => s.trim()).join(" ").trim();
   }
 
   get lemma() {
@@ -133,6 +147,8 @@ export class RealtimeAsrSession {
 
   private async startMock() {
     this.handlers.onStarted?.();
+    this.committed = "";
+    this.interim = "";
     const fallback = this.language === "zh" ? "放弃" : "hello";
     const target =
       this.language === "zh"
@@ -143,10 +159,11 @@ export class RealtimeAsrSession {
       i += 1;
       const step = this.language === "zh" ? 1 : Math.ceil(i / 2);
       const partial = target.slice(0, Math.min(target.length, this.language === "zh" ? i : step));
-      this.lastText = partial;
-      this.handlers.onPartial?.(partial);
+      this.interim = partial;
+      this.publishText(this.combineDisplay(), partial === target);
       if (partial === target) {
-        this.handlers.onFinal?.(target);
+        this.committed = this.combineDisplay();
+        this.interim = "";
       }
     }, 400);
   }
@@ -164,6 +181,9 @@ export class RealtimeAsrSession {
       setTimeout(() => reject(new Error("连接实时识别超时")), 10000);
     });
 
+    this.committed = "";
+    this.interim = "";
+
     this.ws.onmessage = (ev) => {
       if (typeof ev.data !== "string") return;
       try {
@@ -174,16 +194,29 @@ export class RealtimeAsrSession {
         const name = msg.header?.name;
         if (name === "TranscriptionStarted") {
           this.handlers.onStarted?.();
-        } else if (name === "TranscriptionResultChanged" || name === "SentenceEnd") {
-          const text = msg.payload?.result || "";
-          this.lastText = text;
-          this.handlers.onPartial?.(text);
-          if (name === "SentenceEnd") this.handlers.onFinal?.(text);
-        } else if (name === "TranscriptionCompleted") {
-          if (msg.payload?.result) {
-            this.lastText = msg.payload.result;
-            this.handlers.onFinal?.(msg.payload.result);
+        } else if (name === "TranscriptionResultChanged") {
+          // 当前句中间结果：替换 interim，保留已累计句子
+          this.interim = msg.payload?.result || "";
+          this.publishText(this.combineDisplay());
+        } else if (name === "SentenceEnd") {
+          // 句子结束：并入累计全文，继续显示
+          const sentence = (msg.payload?.result || "").trim();
+          if (sentence) {
+            this.committed = [this.committed, sentence].filter(Boolean).join(" ").trim();
           }
+          this.interim = "";
+          this.publishText(this.combineDisplay(), true);
+        } else if (name === "TranscriptionCompleted") {
+          const finalText = (msg.payload?.result || "").trim();
+          // 优先保留累计全文；若服务端给了更长整段则采用
+          if (finalText && finalText.length >= this.combineDisplay().length) {
+            this.committed = finalText;
+            this.interim = "";
+          } else if (this.interim) {
+            this.committed = this.combineDisplay();
+            this.interim = "";
+          }
+          this.publishText(this.combineDisplay(), true);
         } else if (name === "TaskFailed") {
           this.handlers.onError?.(
             new Error(msg.header?.status_text || `实时识别失败 status=${msg.header?.status}`),

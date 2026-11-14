@@ -3,9 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MicGate } from "@/components/MicGate";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
-import {
-  extractChineseFromTranscript,
-} from "@/lib/speech/extract-meaning";
+import { extractChineseFromTranscript } from "@/lib/speech/extract-meaning";
+import { playSuccessChime } from "@/lib/speech/play-success";
 import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
 type DictationMode = "gloss" | "meaning";
@@ -46,10 +45,6 @@ type Timers = {
 
 type Phase = "idle" | "tts" | "wait-record" | "recording" | "feedback";
 
-function normalizeMode(mode: QueueItem["mode"]): DictationMode {
-  return mode === "meaning" || mode === "cloze" ? "meaning" : "gloss";
-}
-
 function playUtterance(text: string, lang: string): Promise<void> {
   return new Promise((resolve) => {
     if (typeof window === "undefined" || !window.speechSynthesis) {
@@ -76,8 +71,31 @@ function playAudioBase64(audioBase64: string, mimeType?: string): Promise<void> 
   });
 }
 
+/**
+ * 听写 TTS 正文：只返回要朗读的原文。
+ * 模式 A = 中文释义；模式 B = 英文单词。禁止任何「请听写/请根据…」前后缀。
+ */
+function dictationTtsText(item: QueueItem): { text: string; lang: string } {
+  const m =
+    item.mode === "meaning" || item.mode === "cloze" ? "meaning" : "gloss";
+  if (m === "meaning") {
+    return { text: item.word.trim(), lang: "en-US" };
+  }
+  let gloss = (item.glossZh || "").trim();
+  // 若词条或旧逻辑误带提示语，剥掉常见前缀（仍以释义原文为准）
+  gloss = gloss
+    .replace(
+      /^(请根据中文释义拼写并朗读单词[。．.\s]*|请根据释义拼写并朗读[：:。．.\s]*|请听写[：:。．.\s]*|请说出这个单词的中文意思[。．.\s]*)+/u,
+      "",
+    )
+    .trim();
+  return { text: gloss, lang: "zh-CN" };
+}
+
 export default function DictationPage() {
   const [micOk, setMicOk] = useState(false);
+  /** 用户点选的听写模式（页面按钮，不依赖设置开关） */
+  const [selectedMode, setSelectedMode] = useState<DictationMode>("gloss");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [items, setItems] = useState<QueueItem[]>([]);
   const [index, setIndex] = useState(0);
@@ -100,13 +118,23 @@ export default function DictationPage() {
   const asrRef = useRef<RealtimeAsrSession | null>(null);
   const submitLock = useRef(false);
   const wordGen = useRef(0);
+  const liveTextRef = useRef("");
+  const spellingRef = useRef("");
+  const meaningRef = useRef("");
+  const startRealtimeRef = useRef<() => Promise<void>>(async () => undefined);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timersRef = useRef(timers);
+  timersRef.current = timers;
 
   const current = items[index];
-  const mode = current ? normalizeMode(current.mode) : "gloss";
+  const mode: DictationMode = current
+    ? current.mode === "meaning" || current.mode === "cloze"
+      ? "meaning"
+      : "gloss"
+    : selectedMode;
 
   const clearTimers = useCallback(() => {
     if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
@@ -120,13 +148,12 @@ export default function DictationPage() {
     setCountdown(null);
   }, []);
 
-  const speakPrompt = useCallback(async (item: QueueItem): Promise<void> => {
-    const m = normalizeMode(item.mode);
-    const text =
-      m === "gloss"
-        ? `请根据中文释义拼写并朗读单词。${item.glossZh || ""}${item.pos ? `，${item.pos}` : ""}`
-        : `请说出这个单词的中文意思。${item.word}`;
-    const lang = m === "gloss" ? "zh-CN" : "en-US";
+  const speakEntry = useCallback(async (item: QueueItem): Promise<void> => {
+    const { text, lang } = dictationTtsText(item);
+    if (!text) {
+      setTtsNote("无可播报文本");
+      return;
+    }
     try {
       const res = await fetch("/api/speech/tts", {
         method: "POST",
@@ -138,19 +165,17 @@ export default function DictationPage() {
         const msg = data.error || "TTS 失败";
         setTtsNote(`TTS 失败：${msg}`);
         setError(msg);
-        // aliyun 生产路径禁止回退浏览器 SpeechSynthesis
         return;
       }
       setTtsNote(
         data.mock
-          ? `TTS mock（${data.provider}）· 仅开发；生产请 SPEECH_PROVIDER=aliyun`
-          : `阿里云 TTS（${data.provider}）`,
+          ? `TTS mock（${data.provider}）· 仅朗读原文`
+          : `阿里云 TTS · 仅朗读原文`,
       );
       if (data.audioBase64) {
         await playAudioBase64(data.audioBase64, data.mimeType);
         return;
       }
-      // 仅 mock 允许用浏览器合成顶替无音频响应
       if (data.mock) {
         await playUtterance(text, lang);
         return;
@@ -172,6 +197,9 @@ export default function DictationPage() {
     setSpelling("");
     setMeaningText("");
     setLiveText("");
+    liveTextRef.current = "";
+    spellingRef.current = "";
+    meaningRef.current = "";
     setPhase("idle");
     try {
       const [meRes, sessRes] = await Promise.all([
@@ -191,8 +219,10 @@ export default function DictationPage() {
         setError(data.error || "无法开始会话");
         return;
       }
+      // 用户点选的模式覆盖队列里的 mode
+      const rawItems = (data.items || []) as QueueItem[];
       setSessionId(data.sessionId);
-      setItems(data.items || []);
+      setItems(rawItems.map((it) => ({ ...it, mode: selectedMode })));
     } finally {
       setBusy(false);
     }
@@ -205,6 +235,27 @@ export default function DictationPage() {
     setRecording(false);
   }, []);
 
+  const nextWord = useCallback(() => {
+    clearTimers();
+    setFeedback(null);
+    setSpelling("");
+    setMeaningText("");
+    setLiveText("");
+    liveTextRef.current = "";
+    spellingRef.current = "";
+    meaningRef.current = "";
+    setPhase("idle");
+    setIndex((prev) => {
+      const next = prev + 1;
+      if (next >= items.length) {
+        if (sessionId) {
+          void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+        }
+      }
+      return next;
+    });
+  }, [clearTimers, items.length, sessionId]);
+
   const submitAttempt = useCallback(
     async (transcriptOverride?: string) => {
       if (!sessionId || !current || submitLock.current || feedback) return;
@@ -215,20 +266,46 @@ export default function DictationPage() {
       try {
         const live =
           transcriptOverride ??
-          liveText ??
+          liveTextRef.current ??
           asrRef.current?.transcript ??
           "";
         await stopAsr();
-        const m = normalizeMode(current.mode);
+        const m =
+          current.mode === "meaning" || current.mode === "cloze"
+            ? "meaning"
+            : "gloss";
         const spellingInput =
           m === "gloss"
-            ? spelling.trim() ||
+            ? spellingRef.current.trim() ||
               extractLemmaFromTranscript(live, current.word)
-            : meaningText.trim() || extractChineseFromTranscript(live);
+            : meaningRef.current.trim() || extractChineseFromTranscript(live);
 
         if (!live.trim() && !spellingInput) {
           setError("未获得识别文本。请开口作答，或检查麦克风 / 实时识别配置。");
           setPhase("wait-record");
+          // 无「立即开始录音」按钮：自动重新走开录计时
+          const mEmpty =
+            current.mode === "meaning" || current.mode === "cloze"
+              ? "meaning"
+              : "gloss";
+          if (mEmpty === "meaning") {
+            setTimeout(() => void startRealtimeRef.current(), 400);
+          } else {
+            let left = timersRef.current.autoStartRecordSeconds;
+            setCountdown(`${left}s 后自动开始录音`);
+            tickTimer.current = setInterval(() => {
+              left -= 1;
+              if (left <= 0) {
+                if (tickTimer.current) clearInterval(tickTimer.current);
+                setCountdown(null);
+              } else {
+                setCountdown(`${left}s 后自动开始录音`);
+              }
+            }, 1000);
+            autoStartTimer.current = setTimeout(() => {
+              void startRealtimeRef.current();
+            }, timersRef.current.autoStartRecordSeconds * 1000);
+          }
           return;
         }
 
@@ -242,59 +319,84 @@ export default function DictationPage() {
             realtimeTranscript: live || spellingInput,
           }),
         });
-        const data = await res.json();
+        const data = (await res.json()) as Feedback & { error?: string };
         if (!res.ok) {
           setError(data.error || "提交失败");
           setPhase("wait-record");
           return;
         }
+
+        if (m === "gloss") {
+          setSpelling(spellingInput);
+          spellingRef.current = spellingInput;
+        } else {
+          setMeaningText(spellingInput);
+          meaningRef.current = spellingInput;
+        }
+
+        // 答对：提示音 + 立即下一词（含 TTS/计时流程）
+        if (data.overallOk) {
+          playSuccessChime();
+          setFeedback(null);
+          setPhase("idle");
+          nextWord();
+          return;
+        }
+
         setFeedback(data);
         setPhase("feedback");
-        if (m === "gloss") setSpelling(spellingInput);
-        else setMeaningText(spellingInput);
       } finally {
         setBusy(false);
         submitLock.current = false;
       }
     },
-    [
-      sessionId,
-      current,
-      feedback,
-      liveText,
-      spelling,
-      meaningText,
-      clearTimers,
-      stopAsr,
-    ],
+    [sessionId, current, feedback, clearTimers, stopAsr, nextWord],
   );
 
   const startRealtime = useCallback(async () => {
     if (!current || recording || feedback) return;
     setError(null);
     setLiveText("");
-    const m = normalizeMode(current.mode);
+    liveTextRef.current = "";
+    const m =
+      current.mode === "meaning" || current.mode === "cloze"
+        ? "meaning"
+        : "gloss";
     try {
       const session = new RealtimeAsrSession(
         {
           onPartial: (t) => {
+            liveTextRef.current = t;
             setLiveText(t);
             if (m === "gloss") {
               const lemma = extractLemmaFromTranscript(t, current.word);
-              if (lemma) setSpelling(lemma);
+              if (lemma) {
+                spellingRef.current = lemma;
+                setSpelling(lemma);
+              }
             } else {
               const zh = extractChineseFromTranscript(t);
-              if (zh) setMeaningText(zh);
+              if (zh) {
+                meaningRef.current = zh;
+                setMeaningText(zh);
+              }
             }
           },
           onFinal: (t) => {
+            liveTextRef.current = t;
             setLiveText(t);
             if (m === "gloss") {
               const lemma = extractLemmaFromTranscript(t, current.word);
-              if (lemma) setSpelling(lemma);
+              if (lemma) {
+                spellingRef.current = lemma;
+                setSpelling(lemma);
+              }
             } else {
               const zh = extractChineseFromTranscript(t);
-              if (zh) setMeaningText(zh);
+              if (zh) {
+                meaningRef.current = zh;
+                setMeaningText(zh);
+              }
             }
           },
           onError: (e) => setError(e.message),
@@ -336,10 +438,12 @@ export default function DictationPage() {
     }
   }, [current, recording, feedback, timers.autoSubmitSeconds, submitAttempt]);
 
+  startRealtimeRef.current = startRealtime;
+
   const beginTimersAfterTts = useCallback(
     (item: QueueItem) => {
-      const m = normalizeMode(item.mode);
-      // 模式 B：播报后直接开录；模式 A：先倒计时再开录
+      const m =
+        item.mode === "meaning" || item.mode === "cloze" ? "meaning" : "gloss";
       if (m === "meaning") {
         setPhase("wait-record");
         void startRealtime();
@@ -373,15 +477,18 @@ export default function DictationPage() {
     const gen = ++wordGen.current;
     clearTimers();
     setLiveText("");
+    liveTextRef.current = "";
     setSpelling("");
+    spellingRef.current = "";
     setMeaningText("");
+    meaningRef.current = "";
     setError(null);
     submitLock.current = false;
     setPhase("tts");
-    setCountdown("正在播报提示…");
+    setCountdown("正在播报…");
 
     void (async () => {
-      await speakPrompt(current);
+      await speakEntry(current);
       if (wordGen.current !== gen) return;
       beginTimersAfterTts(current);
     })();
@@ -394,9 +501,9 @@ export default function DictationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, index, current?.entryId]);
 
-  // 反馈后自动下一词
+  // 答错时：保留反馈，到期自动下一词
   useEffect(() => {
-    if (!feedback) return;
+    if (!feedback || feedback.overallOk) return;
     let left = timers.autoNextWordSeconds;
     setCountdown(`${left}s 后自动下一词`);
     tickTimer.current = setInterval(() => {
@@ -414,24 +521,6 @@ export default function DictationPage() {
     return () => clearTimers();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [feedback]);
-
-  function nextWord() {
-    clearTimers();
-    setFeedback(null);
-    setSpelling("");
-    setMeaningText("");
-    setLiveText("");
-    setPhase("idle");
-    const next = index + 1;
-    if (next >= items.length) {
-      if (sessionId) {
-        void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
-      }
-      setIndex(next);
-      return;
-    }
-    setIndex(next);
-  }
 
   useEffect(() => {
     return () => {
@@ -453,22 +542,53 @@ export default function DictationPage() {
     return (
       <div className="space-y-6 max-w-lg">
         <h1 className="font-display text-3xl">听写</h1>
-        <div className="panel p-6 space-y-4">
-          <p className="text-[var(--muted)]">
-            双模式：<strong>报中文 → 拼写朗读</strong>，以及可开关的
-            <strong> 报单词 → 说中文意思</strong>。实时识别文本显示在上方；判定结果在下方。
+        <div className="panel p-6 space-y-5">
+          <p className="text-[var(--muted)] text-sm">
+            请选择本轮模式（页面点选，不依赖设置开关）。实时识别文本在上方累计显示；答对会提示音并立即下一词。
           </p>
-          <p className="text-sm text-[var(--muted)]">
-            模式 A 在 TTS 播报结束后才开始计时。可在设置中调整自动开录 / 提交 / 下一词秒数。
-          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              className={`rounded-lg border px-4 py-4 text-left transition ${
+                selectedMode === "gloss"
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                  : "border-[var(--line)] hover:border-[var(--accent)]"
+              }`}
+              onClick={() => setSelectedMode("gloss")}
+            >
+              <span className="font-display text-lg block">模式 A</span>
+              <span className="text-sm text-[var(--muted)]">中文 → 拼写朗读</span>
+            </button>
+            <button
+              type="button"
+              className={`rounded-lg border px-4 py-4 text-left transition ${
+                selectedMode === "meaning"
+                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                  : "border-[var(--line)] hover:border-[var(--accent)]"
+              }`}
+              onClick={() => setSelectedMode("meaning")}
+            >
+              <span className="font-display text-lg block">模式 B</span>
+              <span className="text-sm text-[var(--muted)]">单词 → 说中文</span>
+            </button>
+          </div>
+
           {error && (
             <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
               {error}
             </p>
           )}
-          <button type="button" className="btn-primary" disabled={busy} onClick={startSession}>
-            {busy ? "准备中…" : "开始今日听写"}
+          <button type="button" className="btn-primary w-full" disabled={busy} onClick={startSession}>
+            {busy
+              ? "准备中…"
+              : selectedMode === "gloss"
+                ? "开始模式 A 听写"
+                : "开始模式 B 听写"}
           </button>
+          <p className="text-xs text-[var(--muted)]">
+            开录 / 提交 / 答错后下一词秒数可在「设置」调整。模式 A 在中文播报结束后再计时开录。
+          </p>
         </div>
       </div>
     );
@@ -488,7 +608,7 @@ export default function DictationPage() {
             setIndex(0);
           }}
         >
-          返回
+          返回选模式
         </button>
       </div>
     );
@@ -502,28 +622,21 @@ export default function DictationPage() {
           <p className="text-[var(--muted)] text-sm mt-1">
             {index + 1} / {items.length}
             <span className="badge ml-2">
-              {mode === "gloss" ? "模式 A · 释义→拼写" : "模式 B · 单词→中文"}
+              {mode === "gloss" ? "模式 A · 中文→拼写" : "模式 B · 单词→中文"}
             </span>
-            <span className="badge ml-1">实时识别</span>
           </p>
         </div>
       </div>
 
       <div className="panel p-6 space-y-5">
-        {/* 题目提示 */}
         {mode === "gloss" ? (
           <div>
-            <p className="label">中文释义（请拼写并朗读对应单词）</p>
-            <p className="font-display text-2xl leading-snug">
-              {current.glossZh}
-              {current.pos ? (
-                <span className="text-base text-[var(--muted)] ml-2">{current.pos}</span>
-              ) : null}
-            </p>
+            <p className="label">中文释义</p>
+            <p className="font-display text-2xl leading-snug">{current.glossZh}</p>
           </div>
         ) : (
           <div>
-            <p className="label">英文单词（请说出中文意思）</p>
+            <p className="label">单词</p>
             <p className="font-display text-3xl tracking-wide">{current.word}</p>
             {current.ipa && (
               <p className="text-[var(--muted)] mt-1">{current.ipa}</p>
@@ -534,7 +647,7 @@ export default function DictationPage() {
         {ttsNote && (
           <p className="text-xs text-[var(--muted)] bg-[var(--chip)] rounded-md px-3 py-2">
             {ttsNote}
-            {phase === "tts" ? " · 播报中，结束后开始计时" : ""}
+            {phase === "tts" ? " · 播报中" : ""}
           </p>
         )}
         {countdown && (
@@ -543,9 +656,8 @@ export default function DictationPage() {
           </p>
         )}
 
-        {/* 上半：实时识别 */}
         <section className="rounded-lg border border-[var(--line)] bg-[var(--chip)]/40 p-4 space-y-2">
-          <p className="label mb-0">实时识别（上）</p>
+          <p className="label mb-0">实时识别（累计）</p>
           <p className="min-h-[4.5rem] font-display text-xl leading-relaxed whitespace-pre-wrap">
             {liveText ||
               (phase === "tts"
@@ -556,9 +668,8 @@ export default function DictationPage() {
           </p>
         </section>
 
-        {/* 下半：提取预览或判定 */}
         <section className="rounded-lg border border-[var(--line)] p-4 space-y-3">
-          <p className="label mb-0">判定区（下）</p>
+          <p className="label mb-0">判定区</p>
 
           {!feedback ? (
             <>
@@ -568,46 +679,33 @@ export default function DictationPage() {
                   <input
                     className="field text-lg"
                     value={spelling}
-                    onChange={(e) => setSpelling(e.target.value)}
+                    onChange={(e) => {
+                      spellingRef.current = e.target.value;
+                      setSpelling(e.target.value);
+                    }}
                     autoComplete="off"
                     autoCorrect="off"
                     spellCheck={false}
                     disabled={phase === "tts"}
                   />
-                  <p className="text-xs text-[var(--muted)] mt-1">
-                    提交后将分别判定：拼写对错 · 读音对错
-                  </p>
                 </div>
               ) : (
                 <div>
-                  <label className="label">提取中文释义（可改）</label>
+                  <label className="label">提取中文（可改）</label>
                   <input
                     className="field text-lg"
                     value={meaningText}
-                    onChange={(e) => setMeaningText(e.target.value)}
+                    onChange={(e) => {
+                      meaningRef.current = e.target.value;
+                      setMeaningText(e.target.value);
+                    }}
                     autoComplete="off"
                     disabled={phase === "tts"}
                   />
-                  <p className="text-xs text-[var(--muted)] mt-1">
-                    将与词条中文释义比对
-                  </p>
                 </div>
               )}
 
               <div className="flex flex-wrap gap-2 pt-1">
-                {phase === "wait-record" && !recording && (
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    disabled={busy}
-                    onClick={() => {
-                      clearTimers();
-                      void startRealtime();
-                    }}
-                  >
-                    立即开始录音
-                  </button>
-                )}
                 {recording && (
                   <button
                     type="button"
@@ -630,17 +728,9 @@ export default function DictationPage() {
             </>
           ) : (feedback.mode || mode) === "meaning" ? (
             <div className="space-y-4">
-              <div
-                className={`rounded-md px-4 py-3 ${
-                  feedback.meaningOk
-                    ? "bg-[var(--ok-soft)] text-[var(--ok)]"
-                    : "bg-[var(--danger-soft)] text-[var(--danger)]"
-                }`}
-              >
+              <div className="rounded-md px-4 py-3 bg-[var(--danger-soft)] text-[var(--danger)]">
                 <p className="text-xs opacity-80">中文释义</p>
-                <p className="font-display text-xl">
-                  {feedback.meaningOk ? "正确" : "错误"}
-                </p>
+                <p className="font-display text-xl">错误</p>
                 <p className="text-sm mt-1">
                   你说：{feedback.extractedMeaning || meaningText || feedback.asrTranscript || "—"}
                 </p>
@@ -695,16 +785,8 @@ export default function DictationPage() {
                   </p>
                 </div>
               </div>
-              <div
-                className={`rounded-md px-4 py-3 ${
-                  feedback.overallOk
-                    ? "bg-[var(--ok-soft)] text-[var(--ok)]"
-                    : "bg-[var(--danger-soft)] text-[var(--danger)]"
-                }`}
-              >
-                <p className="font-display text-xl">
-                  {feedback.overallOk ? "全对" : "未通过"}
-                </p>
+              <div className="rounded-md px-4 py-3 bg-[var(--danger-soft)] text-[var(--danger)]">
+                <p className="font-display text-xl">未通过</p>
               </div>
               <div className="text-sm space-y-1">
                 <p>
