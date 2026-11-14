@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MicGate } from "@/components/MicGate";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
 import { extractChineseFromTranscript } from "@/lib/speech/extract-meaning";
-import { playSuccessChime } from "@/lib/speech/play-success";
+import { playFailChime, playSuccessChime } from "@/lib/speech/play-sfx";
 import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
 type DictationMode = "gloss" | "meaning";
@@ -334,15 +334,20 @@ export default function DictationPage() {
           meaningRef.current = spellingInput;
         }
 
-        // 答对：提示音 + 立即下一词（含 TTS/计时流程）
         if (data.overallOk) {
+          // 正确：绿勾区 + 叮咚，随即下一词
           playSuccessChime();
-          setFeedback(null);
-          setPhase("idle");
-          nextWord();
+          setFeedback(data);
+          setPhase("feedback");
+          setTimeout(() => {
+            setFeedback(null);
+            nextWord();
+          }, 700);
           return;
         }
 
+        // 错误：惋惜音 + 红叉，仅可重试当前词
+        playFailChime();
         setFeedback(data);
         setPhase("feedback");
       } finally {
@@ -417,14 +422,14 @@ export default function DictationPage() {
       setPhase("recording");
 
       let left = timers.autoSubmitSeconds;
-      setCountdown(`录音中，${left}s 后自动提交（可点「说完了」提前结束）`);
+      setCountdown(`录音中，${left}s 后自动判定`);
       tickTimer.current = setInterval(() => {
         left -= 1;
         if (left <= 0) {
           if (tickTimer.current) clearInterval(tickTimer.current);
           setCountdown(null);
         } else {
-          setCountdown(`录音中，${left}s 后自动提交（可点「说完了」提前结束）`);
+          setCountdown(`录音中，${left}s 后自动判定`);
         }
       }, 1000);
       autoSubmitTimer.current = setTimeout(() => {
@@ -501,26 +506,28 @@ export default function DictationPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, index, current?.entryId]);
 
-  // 答错时：保留反馈，到期自动下一词
-  useEffect(() => {
-    if (!feedback || feedback.overallOk) return;
-    let left = timers.autoNextWordSeconds;
-    setCountdown(`${left}s 后自动下一词`);
-    tickTimer.current = setInterval(() => {
-      left -= 1;
-      if (left <= 0) {
-        if (tickTimer.current) clearInterval(tickTimer.current);
-        setCountdown(null);
-      } else {
-        setCountdown(`${left}s 后自动下一词`);
-      }
-    }, 1000);
-    autoNextTimer.current = setTimeout(() => {
-      nextWord();
-    }, timers.autoNextWordSeconds * 1000);
-    return () => clearTimers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [feedback]);
+  const retryCurrent = useCallback(() => {
+    if (!current) return;
+    clearTimers();
+    wordGen.current += 1;
+    const gen = ++wordGen.current;
+    setFeedback(null);
+    setError(null);
+    setLiveText("");
+    liveTextRef.current = "";
+    setSpelling("");
+    spellingRef.current = "";
+    setMeaningText("");
+    meaningRef.current = "";
+    submitLock.current = false;
+    setPhase("tts");
+    setCountdown("正在播报…");
+    void (async () => {
+      await speakEntry(current);
+      if (wordGen.current !== gen) return;
+      beginTimersAfterTts(current);
+    })();
+  }, [current, clearTimers, speakEntry, beginTimersAfterTts]);
 
   useEffect(() => {
     return () => {
@@ -544,7 +551,7 @@ export default function DictationPage() {
         <h1 className="font-display text-3xl">听写</h1>
         <div className="panel p-6 space-y-5">
           <p className="text-[var(--muted)] text-sm">
-            请选择本轮模式（页面点选，不依赖设置开关）。实时识别文本在上方累计显示；答对会提示音并立即下一词。
+            请选择本轮模式。答对叮咚后进入下一词；答错红叉仅可重试本词。
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -587,7 +594,7 @@ export default function DictationPage() {
                 : "开始模式 B 听写"}
           </button>
           <p className="text-xs text-[var(--muted)]">
-            开录 / 提交 / 答错后下一词秒数可在「设置」调整。模式 A 在中文播报结束后再计时开录。
+            开录 / 自动判定秒数可在「设置」调整。模式 A 在中文播报结束后再计时开录。
           </p>
         </div>
       </div>
@@ -675,7 +682,7 @@ export default function DictationPage() {
             <>
               {mode === "gloss" ? (
                 <div>
-                  <label className="label">提取拼写（可改）</label>
+                  <label className="label">提取拼写</label>
                   <input
                     className="field text-lg"
                     value={spelling}
@@ -687,11 +694,12 @@ export default function DictationPage() {
                     autoCorrect="off"
                     spellCheck={false}
                     disabled={phase === "tts"}
+                    readOnly={recording}
                   />
                 </div>
               ) : (
                 <div>
-                  <label className="label">提取中文（可改）</label>
+                  <label className="label">提取中文</label>
                   <input
                     className="field text-lg"
                     value={meaningText}
@@ -701,107 +709,54 @@ export default function DictationPage() {
                     }}
                     autoComplete="off"
                     disabled={phase === "tts"}
+                    readOnly={recording}
                   />
                 </div>
               )}
-
-              <div className="flex flex-wrap gap-2 pt-1">
-                {recording && (
-                  <button
-                    type="button"
-                    className="btn-accent"
-                    disabled={busy}
-                    onClick={() => {
-                      clearTimers();
-                      void submitAttempt();
-                    }}
-                  >
-                    说完了
-                  </button>
-                )}
-              </div>
               {error && (
                 <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
                   {error}
                 </p>
               )}
             </>
-          ) : (feedback.mode || mode) === "meaning" ? (
-            <div className="space-y-4">
-              <div className="rounded-md px-4 py-3 bg-[var(--danger-soft)] text-[var(--danger)]">
-                <p className="text-xs opacity-80">中文释义</p>
-                <p className="font-display text-xl">错误</p>
-                <p className="text-sm mt-1">
-                  你说：{feedback.extractedMeaning || meaningText || feedback.asrTranscript || "—"}
-                </p>
-              </div>
-              <div className="text-sm space-y-1">
-                <p>
-                  <span className="text-[var(--muted)]">单词：</span>
-                  <strong className="text-lg ml-1">{feedback.answer.word}</strong>
-                </p>
-                {feedback.answer.glossZh && (
-                  <p>
-                    <span className="text-[var(--muted)]">正解释义：</span>
-                    {feedback.answer.glossZh}
-                  </p>
-                )}
-              </div>
-              <button type="button" className="btn-primary w-full" onClick={nextWord}>
-                {index + 1 >= items.length ? "完成本轮" : "下一词"}
-              </button>
+          ) : feedback.overallOk ? (
+            <div className="rounded-md px-4 py-6 bg-[var(--ok-soft)] text-[var(--ok)] text-center space-y-2">
+              <p className="font-display text-5xl leading-none" aria-label="正确">
+                ✓
+              </p>
+              <p className="font-display text-xl">正确</p>
+              <p className="text-sm opacity-80">
+                {(feedback.mode || mode) === "meaning"
+                  ? feedback.extractedMeaning || meaningText
+                  : feedback.extractedSpelling || spelling}
+              </p>
             </div>
           ) : (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div
-                  className={`rounded-md px-3 py-3 ${
-                    feedback.spellingOk
-                      ? "bg-[var(--ok-soft)] text-[var(--ok)]"
-                      : "bg-[var(--danger-soft)] text-[var(--danger)]"
-                  }`}
-                >
-                  <p className="text-xs opacity-80">拼写</p>
-                  <p className="font-display text-lg">
-                    {feedback.spellingOk ? "正确" : "错误"}
-                  </p>
-                  <p className="text-sm mt-1 opacity-90">
-                    你的：{feedback.extractedSpelling || spelling || "—"}
-                  </p>
-                </div>
-                <div
-                  className={`rounded-md px-3 py-3 ${
-                    feedback.pronunciationOk
-                      ? "bg-[var(--ok-soft)] text-[var(--ok)]"
-                      : "bg-[var(--danger-soft)] text-[var(--danger)]"
-                  }`}
-                >
-                  <p className="text-xs opacity-80">读音</p>
-                  <p className="font-display text-lg">
-                    {feedback.pronunciationOk ? "正确" : "错误"}
-                  </p>
-                  <p className="text-sm mt-1 opacity-90 truncate" title={feedback.asrTranscript || ""}>
-                    识别：{feedback.asrTranscript || "—"}
-                  </p>
-                </div>
-              </div>
-              <div className="rounded-md px-4 py-3 bg-[var(--danger-soft)] text-[var(--danger)]">
-                <p className="font-display text-xl">未通过</p>
-              </div>
-              <div className="text-sm space-y-1">
-                <p>
-                  <span className="text-[var(--muted)]">正解：</span>
-                  <strong className="text-lg ml-1">{feedback.answer.word}</strong>
-                  {feedback.answer.ipa && (
-                    <span className="text-[var(--muted)] ml-2">{feedback.answer.ipa}</span>
-                  )}
+              <div className="rounded-md px-4 py-6 bg-[var(--danger-soft)] text-[var(--danger)] text-center space-y-2">
+                <p className="font-display text-5xl leading-none" aria-label="错误">
+                  ✗
                 </p>
-                {feedback.answer.glossZh && (
-                  <p className="text-[var(--muted)]">{feedback.answer.glossZh}</p>
+                <p className="font-display text-xl">错误</p>
+                <p className="text-sm opacity-90">
+                  你的：
+                  {(feedback.mode || mode) === "meaning"
+                    ? feedback.extractedMeaning || meaningText || feedback.asrTranscript || "—"
+                    : feedback.extractedSpelling || spelling || "—"}
+                </p>
+                {(feedback.mode || mode) === "gloss" && (
+                  <p className="text-xs opacity-80">
+                    拼写 {feedback.spellingOk ? "✓" : "✗"} · 读音{" "}
+                    {feedback.pronunciationOk ? "✓" : "✗"}
+                  </p>
                 )}
               </div>
-              <button type="button" className="btn-primary w-full" onClick={nextWord}>
-                {index + 1 >= items.length ? "完成本轮" : "下一词"}
+              <p className="text-sm text-[var(--muted)] text-center">
+                正解：<strong className="text-[var(--ink)]">{feedback.answer.word}</strong>
+                {feedback.answer.glossZh ? ` · ${feedback.answer.glossZh}` : ""}
+              </p>
+              <button type="button" className="btn-primary w-full" onClick={retryCurrent}>
+                重试本词
               </button>
             </div>
           )}
