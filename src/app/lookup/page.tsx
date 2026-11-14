@@ -12,7 +12,10 @@ type EntryView = {
   ipa: string | null;
   pos: string | null;
   example: string | null;
+  examples?: string[];
   phrases: string[];
+  synonyms?: string[];
+  antonyms?: string[];
   related: string[];
 };
 
@@ -170,6 +173,19 @@ export default function LookupPage() {
     }
   }
 
+  const entry = result?.entry ?? null;
+  const exampleLines = entry?.examples?.length
+    ? entry.examples
+    : entry?.example
+      ? [entry.example]
+      : [];
+  const phrases = entry?.phrases ?? [];
+  const synonyms = entry?.synonyms ?? [];
+  const antonyms = entry?.antonyms ?? [];
+  const related = entry?.related ?? [];
+  // 本地词条没有 synonyms 字段，用 related 兜底；外网 related 是 synonyms 子集，避免重复展示
+  const showRelated = synonyms.length === 0 && related.length > 0;
+
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="shrink-0">
@@ -265,22 +281,52 @@ export default function LookupPage() {
               </p>
               {result.entry.ipa && <p className="text-xs text-[var(--muted)]">{result.entry.ipa}</p>}
               <p className="text-sm">{result.entry.glossZh}</p>
-              {result.entry.example && (
-                <p className="text-xs text-[var(--muted)] border-l-2 border-[var(--teal)] pl-2">
-                  {result.entry.example}
-                </p>
-              )}
-              {result.entry.phrases?.length > 0 && (
-                <p className="text-xs">
-                  <span className="text-[var(--muted)]">词组：</span>
-                  {result.entry.phrases.join(" · ")}
-                </p>
-              )}
-              {result.entry.related?.length > 0 && (
-                <p className="text-xs">
-                  <span className="text-[var(--muted)]">相关：</span>
-                  {result.entry.related.join(" · ")}
-                </p>
+              {(exampleLines.length > 0 ||
+                phrases.length > 0 ||
+                synonyms.length > 0 ||
+                antonyms.length > 0 ||
+                showRelated) && (
+                <div className="no-scrollbar max-h-40 shrink-0 space-y-1 overflow-y-auto text-xs">
+                  {exampleLines.length > 0 && (
+                    <div>
+                      <span className="text-[var(--muted)]">例句：</span>
+                      <ul className="mt-0.5 space-y-0.5">
+                        {exampleLines.map((line, i) => (
+                          <li
+                            key={`${i}-${line}`}
+                            className="border-l-2 border-[var(--teal)] pl-2 leading-snug"
+                          >
+                            {line}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {phrases.length > 0 && (
+                    <p>
+                      <span className="text-[var(--muted)]">常用词组：</span>
+                      {phrases.join(" · ")}
+                    </p>
+                  )}
+                  {synonyms.length > 0 && (
+                    <p>
+                      <span className="text-[var(--muted)]">近义词：</span>
+                      {synonyms.join(" · ")}
+                    </p>
+                  )}
+                  {antonyms.length > 0 && (
+                    <p>
+                      <span className="text-[var(--muted)]">反义词：</span>
+                      {antonyms.join(" · ")}
+                    </p>
+                  )}
+                  {showRelated && (
+                    <p>
+                      <span className="text-[var(--muted)]">关联词：</span>
+                      {related.join(" · ")}
+                    </p>
+                  )}
+                </div>
               )}
               {result.inWordList ? (
                 <p className="text-xs text-[var(--muted)] bg-[var(--ok-soft)] px-2 py-1 rounded-md mt-1">

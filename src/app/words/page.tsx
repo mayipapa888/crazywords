@@ -22,7 +22,7 @@ export default function WordsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [page, setPage] = useState(0);
 
-  const PAGE_SIZE = 12;
+  const PAGE_SIZE = 15;
   const pageCount = Math.max(1, Math.ceil(entries.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = entries.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
@@ -95,7 +95,7 @@ export default function WordsPage() {
       {msg && <p className="text-xs text-[var(--teal)]">{msg}</p>}
 
       <div className="panel min-h-0 flex-1 overflow-hidden">
-        <table className="w-full text-sm">
+        <table className="w-full text-base">
           <thead className="bg-[var(--chip)] text-left text-[var(--muted)]">
             <tr>
               <th className="px-3 py-1.5 font-medium">单词</th>

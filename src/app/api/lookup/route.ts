@@ -77,7 +77,10 @@ function serializeEntry(entry: {
     ipa: entry.ipa,
     pos: entry.pos,
     example: entry.example,
+    examples: entry.example ? [entry.example] : [],
     phrases: parseStringArray(entry.phrases),
+    synonyms: [],
+    antonyms: [],
     related: parseStringArray(entry.related),
   };
 }
@@ -201,7 +204,15 @@ export async function POST(req: Request) {
     const enrich = await enrichWord(lemma);
     if (enrich.warnings?.length) warnings.push(...enrich.warnings);
 
-    const hasContent = Boolean(enrich.glossZh || enrich.example || enrich.ipa);
+    const hasContent = Boolean(
+      enrich.glossZh ||
+        enrich.example ||
+        enrich.ipa ||
+        enrich.examples.length ||
+        enrich.synonyms.length ||
+        enrich.antonyms.length ||
+        enrich.phrases.length,
+    );
     // 外网词也可能已存在于词表（如中文释义未命中、但译出的英文词已在表中）
     const existingLocal = hasContent
       ? matchLocalEntry(candidates, normalizeEn(enrich.word || lemma), "")
@@ -228,7 +239,10 @@ export async function POST(req: Request) {
               ipa: enrich.ipa,
               pos: enrich.pos,
               example: enrich.example,
+              examples: enrich.examples,
               phrases: enrich.phrases,
+              synonyms: enrich.synonyms,
+              antonyms: enrich.antonyms,
               related: enrich.related,
             }
           : null,

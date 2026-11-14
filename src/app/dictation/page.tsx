@@ -219,28 +219,54 @@ export default function DictationPage() {
     }
   }, []);
 
-  /** 答错后的正解朗读：连读 3 遍单词，遍与遍之间留 0.7s 间隔 */
-  const speakWordThreeTimes = useCallback(async (word: string) => {
-    const speakOnce = async () => {
+  /**
+   * 答错后的正解播报：单词连读 3 遍（间隔 0.7s），随后依次朗读
+   * 例句、词组、相近词（近/反义）。任一段为空则跳过。
+   */
+  const speakAnswer = useCallback(async (answer: Feedback["answer"]) => {
+    const hasChinese = (text: string) => /[\u4e00-\u9fff]/.test(text);
+
+    const speakOnce = async (text: string, language: string) => {
+      const value = (text || "").trim();
+      if (!value) return;
       try {
         const res = await fetch("/api/speech/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: word, language: "en-US" }),
+          body: JSON.stringify({ text: value, language }),
         });
         const data = await res.json();
         if (res.ok && data.audioBase64) {
           await playAudioBase64(data.audioBase64, data.mimeType);
           return;
         }
-        await playUtterance(word, "en-US");
+        await playUtterance(value, language);
       } catch {
-        await playUtterance(word, "en-US");
+        await playUtterance(value, language);
       }
     };
+
     for (let i = 0; i < 3; i += 1) {
-      await speakOnce();
+      await speakOnce(answer.word, "en-US");
       if (i < 2) await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+
+    if (answer.example) {
+      await speakOnce(answer.example, "en-US");
+    }
+
+    if (answer.phrases && answer.phrases.length > 0) {
+      const phraseText = answer.phrases.join(", ");
+      await speakOnce(phraseText, hasChinese(phraseText) ? "zh-CN" : "en-US");
+    }
+
+    if (answer.related && answer.related.length > 0) {
+      const relatedText = answer.related
+        .map((item) => item.replace(/^(近|反)\s*[:：]\s*/, ""))
+        .join(", ");
+      if (relatedText.trim()) {
+        await speakOnce(relatedText, hasChinese(relatedText) ? "zh-CN" : "en-US");
+      }
     }
   }, []);
 
@@ -405,13 +431,13 @@ export default function DictationPage() {
         playFailChime();
         setFeedback(data);
         setPhase("feedback");
-        void speakWordThreeTimes(data.answer.word);
+        void speakAnswer(data.answer);
       } finally {
         setBusy(false);
         submitLock.current = false;
       }
     },
-    [sessionId, current, feedback, clearTimers, stopAsr, nextWord, speakWordThreeTimes],
+    [sessionId, current, feedback, clearTimers, stopAsr, nextWord, speakAnswer],
   );
 
   const startRealtime = useCallback(async () => {
@@ -842,7 +868,9 @@ export default function DictationPage() {
               </div>
               <AnswerCard answer={feedback.answer} />
               <div className="flex items-center justify-between gap-2">
-                <p className="text-xs text-[var(--muted)]">正解已朗读 3 遍</p>
+                <p className="text-xs text-[var(--muted)]">
+                  正解播报：单词×3 · 例句 · 词组 · 相近词
+                </p>
                 <button type="button" className="btn-primary" onClick={retryCurrent}>
                   重试本词
                 </button>
