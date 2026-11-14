@@ -71,6 +71,27 @@ function playAudioBase64(audioBase64: string, mimeType?: string): Promise<void> 
   });
 }
 
+/**
+ * 听写 TTS 正文：只返回要朗读的原文。
+ * 模式 A = 中文释义；模式 B = 英文单词。禁止任何「请听写/请根据…」前后缀。
+ */
+function dictationTtsText(item: QueueItem): { text: string; lang: string } {
+  const m =
+    item.mode === "meaning" || item.mode === "cloze" ? "meaning" : "gloss";
+  if (m === "meaning") {
+    return { text: item.word.trim(), lang: "en-US" };
+  }
+  let gloss = (item.glossZh || "").trim();
+  // 若词条或旧逻辑误带提示语，剥掉常见前缀（仍以释义原文为准）
+  gloss = gloss
+    .replace(
+      /^(请根据中文释义拼写并朗读单词[。．.\s]*|请根据释义拼写并朗读[：:。．.\s]*|请听写[：:。．.\s]*|请说出这个单词的中文意思[。．.\s]*)+/u,
+      "",
+    )
+    .trim();
+  return { text: gloss, lang: "zh-CN" };
+}
+
 export default function DictationPage() {
   const [micOk, setMicOk] = useState(false);
   /** 用户点选的听写模式（页面按钮，不依赖设置开关） */
@@ -127,17 +148,12 @@ export default function DictationPage() {
     setCountdown(null);
   }, []);
 
-  const speakPrompt = useCallback(async (item: QueueItem): Promise<void> => {
-    const m =
-      item.mode === "meaning" || item.mode === "cloze" ? "meaning" : "gloss";
-    // 模式 A：只读中文意思（不含词性、不含提示套话）；模式 B：只读英文单词
-    const text =
-      m === "gloss" ? (item.glossZh || "").trim() : item.word.trim();
+  const speakEntry = useCallback(async (item: QueueItem): Promise<void> => {
+    const { text, lang } = dictationTtsText(item);
     if (!text) {
       setTtsNote("无可播报文本");
       return;
     }
-    const lang = m === "gloss" ? "zh-CN" : "en-US";
     try {
       const res = await fetch("/api/speech/tts", {
         method: "POST",
@@ -153,8 +169,8 @@ export default function DictationPage() {
       }
       setTtsNote(
         data.mock
-          ? `TTS mock（${data.provider}）· 仅开发；生产请 SPEECH_PROVIDER=aliyun`
-          : `阿里云 TTS（${data.provider}）`,
+          ? `TTS mock（${data.provider}）· 仅朗读原文`
+          : `阿里云 TTS · 仅朗读原文`,
       );
       if (data.audioBase64) {
         await playAudioBase64(data.audioBase64, data.mimeType);
@@ -472,7 +488,7 @@ export default function DictationPage() {
     setCountdown("正在播报…");
 
     void (async () => {
-      await speakPrompt(current);
+      await speakEntry(current);
       if (wordGen.current !== gen) return;
       beginTimersAfterTts(current);
     })();
