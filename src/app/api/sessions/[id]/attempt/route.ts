@@ -2,9 +2,22 @@ import { NextResponse } from "next/server";
 import { errorJson, jsonWithSession, requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { assertByteLimit, bufferFromBase64, MAX_AUDIO_BYTES } from "@/lib/limits";
-import { getAsrProvider } from "@/lib/speech";
+import {
+  checkMeaning,
+  extractChineseFromTranscript,
+} from "@/lib/speech/extract-meaning";
+import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
+import { getAsrProvider, getSpeechProviderName } from "@/lib/speech";
 import { checkPronunciation, checkSpelling } from "@/lib/spelling";
 import { applyGrade } from "@/lib/srs/schedule";
+
+type DictationMode = "gloss" | "meaning";
+
+function parseMode(raw: unknown): DictationMode {
+  const s = String(raw || "gloss");
+  if (s === "meaning" || s === "cloze") return "meaning"; // cloze 旧值兼容 → 模式 B
+  return "gloss";
+}
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -20,17 +33,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
     const contentType = req.headers.get("content-type") || "";
     let entryId = "";
-    let mode: "gloss" | "cloze" = "gloss";
+    let mode: DictationMode = "gloss";
     let spellingInput = "";
     let audio: Buffer | null = null;
     let skipAsr = false;
+    let realtimeTranscript: string | null = null;
 
     if (contentType.includes("multipart/form-data")) {
       const form = await req.formData();
       entryId = String(form.get("entryId") || "");
-      mode = String(form.get("mode") || "gloss") === "cloze" ? "cloze" : "gloss";
+      mode = parseMode(form.get("mode"));
       spellingInput = String(form.get("spellingInput") || "");
       skipAsr = String(form.get("skipAsr") || "") === "1";
+      if (form.get("realtimeTranscript")) {
+        realtimeTranscript = String(form.get("realtimeTranscript"));
+      }
       const file = form.get("audio");
       if (file && file instanceof File) {
         assertByteLimit(file.size, MAX_AUDIO_BYTES, "录音");
@@ -39,9 +56,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     } else {
       const body = await req.json();
       entryId = body.entryId;
-      mode = body.mode === "cloze" ? "cloze" : "gloss";
+      mode = parseMode(body.mode);
       spellingInput = body.spellingInput || "";
       skipAsr = Boolean(body.skipAsr);
+      if (body.realtimeTranscript != null) {
+        realtimeTranscript = String(body.realtimeTranscript);
+      }
       if (body.audioBase64) {
         audio = bufferFromBase64(String(body.audioBase64), MAX_AUDIO_BYTES, "录音");
       }
@@ -52,7 +72,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       return NextResponse.json({ error: "词条不存在" }, { status: 404 });
     }
 
-    // 确认词条属于当前用户词表
     const list = await prisma.wordList.findFirst({
       where: { id: entry.listId, userId: auth.user.id },
     });
@@ -60,38 +79,89 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       return NextResponse.json({ error: "无权访问该词条" }, { status: 403 });
     }
 
-    const spellingOk = checkSpelling(spellingInput, entry.word);
-
     if (skipAsr) {
       return NextResponse.json(
-        { error: "必须录音判定发音，不能跳过语音" },
+        { error: "必须录音判定，不能跳过语音" },
         { status: 400 },
       );
     }
 
-    if (!audio || audio.length === 0) {
+    let asrTranscript: string | null = null;
+    let asrProvider = "unknown";
+
+    if (realtimeTranscript != null && realtimeTranscript.trim() !== "") {
+      asrTranscript = realtimeTranscript.trim();
+      asrProvider =
+        getSpeechProviderName() === "aliyun"
+          ? "aliyun-realtime"
+          : "mock-realtime";
+    } else if (audio && audio.length > 0) {
+      const asr = getAsrProvider();
+      const useHint = getSpeechProviderName() === "mock";
+      const asrResult = await asr.recognize(audio, {
+        language: mode === "meaning" ? "zh-CN" : "en-US",
+        hint: useHint
+          ? mode === "meaning"
+            ? entry.glossZh || undefined
+            : entry.word
+          : undefined,
+      });
+      asrTranscript = asrResult.text;
+      asrProvider = asr.name;
+    } else {
       return NextResponse.json(
-        { error: "缺少录音。听写必须提交语音，无麦克风不可完成。" },
+        {
+          error:
+            "缺少语音结果。请使用实时识别，或上传录音。无麦克风不可完成听写。",
+        },
         { status: 400 },
       );
     }
 
-    const asr = getAsrProvider();
-    const useHint = (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "mock";
-    const asrResult = await asr.recognize(audio, {
-      language: "en-US",
-      hint: useHint ? entry.word : undefined,
-    });
-    const asrTranscript = asrResult.text;
-    const pronunciationOk = checkPronunciation(asrTranscript, entry.word);
-    const overallOk = spellingOk && pronunciationOk;
+    let spellingOk = false;
+    let pronunciationOk = false;
+    let meaningOk: boolean | null = null;
+    let extractedSpelling: string | null = null;
+    let extractedMeaning: string | null = null;
+    let overallOk = false;
+    let wrongKinds = "both";
+
+    if (mode === "meaning") {
+      extractedMeaning =
+        spellingInput.trim() ||
+        extractChineseFromTranscript(asrTranscript || "") ||
+        null;
+      meaningOk = checkMeaning(asrTranscript, entry.glossZh);
+      // 复用 Attempt 布尔字段：释义口述对则两者同为 true
+      spellingOk = meaningOk;
+      pronunciationOk = meaningOk;
+      overallOk = meaningOk;
+      wrongKinds = meaningOk ? "both" : "meaning";
+    } else {
+      extractedSpelling =
+        spellingInput.trim() ||
+        extractLemmaFromTranscript(asrTranscript || "", entry.word) ||
+        null;
+      spellingOk = checkSpelling(extractedSpelling || spellingInput, entry.word);
+      pronunciationOk = checkPronunciation(asrTranscript, entry.word);
+      overallOk = spellingOk && pronunciationOk;
+      wrongKinds =
+        !spellingOk && !pronunciationOk
+          ? "both"
+          : !spellingOk
+            ? "spelling"
+            : "pronunciation";
+    }
 
     const attempt = await prisma.attempt.create({
       data: {
         sessionId,
         entryId,
         mode,
-        spellingInput,
+        spellingInput:
+          mode === "meaning"
+            ? extractedMeaning || spellingInput
+            : extractedSpelling || spellingInput,
         spellingOk,
         asrTranscript,
         pronunciationOk,
@@ -126,27 +196,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       const patch = applyGrade(card, "again");
       await prisma.cardState.update({ where: { id: card.id }, data: patch });
 
-      const kinds =
-        !spellingOk && !pronunciationOk
-          ? "both"
-          : !spellingOk
-            ? "spelling"
-            : "pronunciation";
-
       await prisma.wrongBookItem.upsert({
         where: { userId_entryId: { userId: auth.user.id, entryId } },
         create: {
           userId: auth.user.id,
           entryId,
           wrongCount: 1,
-          lastWrongKinds: kinds,
+          lastWrongKinds: wrongKinds,
           active: true,
           consecutiveOk: 0,
         },
         update: {
           wrongCount: { increment: 1 },
           lastWrongAt: new Date(),
-          lastWrongKinds: kinds,
+          lastWrongKinds: wrongKinds,
           active: true,
           consecutiveOk: 0,
         },
@@ -156,11 +219,15 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     return jsonWithSession(
       {
         attemptId: attempt.id,
+        mode,
         spellingOk,
         pronunciationOk,
+        meaningOk,
         overallOk,
         asrTranscript,
-        asrProvider: asr.name,
+        asrProvider,
+        extractedSpelling,
+        extractedMeaning,
         answer: {
           word: entry.word,
           glossZh: entry.glossZh,
