@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { errorJson, jsonWithSession, requireUser } from "@/lib/auth";
 import { assertByteLimit, bufferFromBase64, MAX_AUDIO_BYTES } from "@/lib/limits";
-import { getAsrProvider } from "@/lib/speech";
+import { getAsrProvider, getSpeechProviderName } from "@/lib/speech";
 
 export async function POST(req: Request) {
   try {
@@ -31,7 +31,7 @@ export async function POST(req: Request) {
     }
 
     const asr = getAsrProvider();
-    const useHint = (process.env.SPEECH_PROVIDER || "mock").toLowerCase() === "mock";
+    const useHint = getSpeechProviderName() === "mock";
     const result = await asr.recognize(audio, {
       language: "en-US",
       hint: useHint ? hint : undefined,

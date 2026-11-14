@@ -30,7 +30,7 @@ export class MockTtsProvider implements TtsProvider {
       spokenText: text,
       provider: this.name,
       mock: true,
-      // 无真实音频；前端可回退到浏览器 SpeechSynthesis 仅作提示（听写主路径仍走本接口）
+      // 无真实音频；仅 SPEECH_PROVIDER=mock 时前端可用浏览器 SpeechSynthesis 顶替
     };
   }
 }
