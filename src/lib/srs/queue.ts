@@ -2,6 +2,8 @@ import { prisma } from "../db";
 import { canDictate } from "../json";
 import { localDateKey } from "./schedule";
 
+export type DictationMode = "gloss" | "meaning";
+
 export type QueueItem = {
   entryId: string;
   word: string;
@@ -9,17 +11,19 @@ export type QueueItem = {
   ipa: string | null;
   pos: string | null;
   example: string | null;
-  mode: "gloss" | "cloze";
+  mode: DictationMode;
   reason: "due" | "wrong" | "new";
 };
 
 /**
  * 今日队列：到期复习 → 活跃错词（≤40% N）→ 新词补齐 N。
  * 逾期 ≥ N → 复习日，不抽新词。
+ * clozeEnabled：沿用设置字段，表示是否启用模式 B（报单词 → 说中文）。
  */
 export async function buildTodayQueue(userId: string, goalN: number, clozeEnabled: boolean) {
   const now = new Date();
   const date = localDateKey(now);
+  const meaningEnabled = clozeEnabled;
 
   const userLists = await prisma.wordList.findMany({
     where: { userId },
@@ -33,7 +37,7 @@ export async function buildTodayQueue(userId: string, goalN: number, clozeEnable
   const entries = await prisma.wordEntry.findMany({
     where: { listId: { in: listIds } },
   });
-  const dictatable = entries.filter((e) => canDictate(e, clozeEnabled));
+  const dictatable = entries.filter((e) => canDictate(e, meaningEnabled));
   const byId = new Map(dictatable.map((e) => [e.id, e]));
 
   const cards = await prisma.cardState.findMany({ where: { userId } });
@@ -44,9 +48,12 @@ export async function buildTodayQueue(userId: string, goalN: number, clozeEnable
     orderBy: { lastWrongAt: "desc" },
   });
 
-  const pickMode = (entry: (typeof dictatable)[0]): "gloss" | "cloze" => {
-    if (entry.glossZh?.trim()) return "gloss";
-    return "cloze";
+  let modeCursor = 0;
+  const pickMode = (): DictationMode => {
+    if (!meaningEnabled) return "gloss";
+    const mode: DictationMode = modeCursor % 2 === 0 ? "gloss" : "meaning";
+    modeCursor += 1;
+    return mode;
   };
 
   const due: QueueItem[] = [];
@@ -62,7 +69,7 @@ export async function buildTodayQueue(userId: string, goalN: number, clozeEnable
         ipa: entry.ipa,
         pos: entry.pos,
         example: entry.example,
-        mode: pickMode(entry),
+        mode: pickMode(),
         reason: "due",
       });
     }
@@ -94,7 +101,7 @@ export async function buildTodayQueue(userId: string, goalN: number, clozeEnable
         ipa: entry.ipa,
         pos: entry.pos,
         example: entry.example,
-        mode: pickMode(entry),
+        mode: pickMode(),
         reason: "wrong",
       });
       used.add(entry.id);
@@ -116,7 +123,7 @@ export async function buildTodayQueue(userId: string, goalN: number, clozeEnable
         ipa: entry.ipa,
         pos: entry.pos,
         example: entry.example,
-        mode: pickMode(entry),
+        mode: pickMode(),
         reason: "new",
       });
       used.add(entry.id);

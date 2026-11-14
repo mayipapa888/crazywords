@@ -14,6 +14,7 @@ model User {
   sessionKey             String?  @unique // httpOnly cookie 绑定的会话用户
   locale                 String   @default("zh-CN")
   dailyGoalDefault       Int      @default(20)
+  /// 沿用字段名：启用听写模式 B（报单词 → 说中文）；关闭则仅模式 A
   clozeEnabled           Boolean  @default(true)
   /// 听写：录音开始后自动提交秒数
   autoSubmitSeconds      Int      @default(15)
@@ -122,7 +123,7 @@ model Attempt {
   id              String   @id @default(cuid())
   sessionId       String
   entryId         String
-  mode            String // gloss | cloze
+  mode            String // gloss | meaning（旧 cloze 兼容读作 meaning）
   spellingInput   String
   spellingOk      Boolean
   asrTranscript   String?

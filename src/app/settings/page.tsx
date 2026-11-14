@@ -76,9 +76,11 @@ export default function SettingsPage() {
             onChange={(e) => setCloze(e.target.checked)}
           />
           <span>
-            <span className="font-medium block">启用例句挖空</span>
+            <span className="font-medium block">启用模式 B：报单词 → 说中文</span>
             <span className="text-sm text-[var(--muted)]">
-              关闭后听写仅走释义拼写。默认开启。
+              关闭后仅模式 A（报中文 → 拼写朗读）。字段仍为{" "}
+              <code className="bg-[var(--chip)] px-1 rounded">clozeEnabled</code>
+              。默认开启；队列中与模式 A 交替出题。
             </span>
           </span>
         </label>
@@ -86,7 +88,7 @@ export default function SettingsPage() {
         <div className="border-t border-[var(--line)] pt-4 space-y-4">
           <p className="font-medium">实时听写计时（秒）</p>
           <div>
-            <label className="label">自动开始录音（进入题目后）</label>
+            <label className="label">自动开始录音（模式 A：TTS 结束后）</label>
             <input
               type="number"
               min={1}
@@ -95,7 +97,9 @@ export default function SettingsPage() {
               value={autoStart}
               onChange={(e) => setAutoStart(Number(e.target.value) || 10)}
             />
-            <p className="text-xs text-[var(--muted)] mt-1">默认 10</p>
+            <p className="text-xs text-[var(--muted)] mt-1">
+              默认 10。计时从释义播报结束起算；模式 B 播报后直接开录。
+            </p>
           </div>
           <div>
             <label className="label">自动提交（开录后）</label>
