@@ -14,6 +14,28 @@ function normalizeEn(s: string) {
   return s.trim().toLowerCase().replace(/[^\w'-]/g, "");
 }
 
+/**
+ * 在当前用户全部词表的候选条目里做本地匹配：
+ * 英文精确命中优先，其次中文释义包含。命中即说明该词已在词表中。
+ */
+function matchLocalEntry<T extends { word: string; glossZh: string | null }>(
+  candidates: T[],
+  qEn: string,
+  qZh: string,
+): T | null {
+  if (qEn) {
+    const byEn = candidates.find((e) => e.word.toLowerCase() === qEn);
+    if (byEn) return byEn;
+  }
+  if (!qZh) return null;
+  return (
+    candidates.find((e) => {
+      const g = (e.glossZh || "").replace(/\s+/g, "");
+      return g.includes(qZh) || qZh.includes(g.replace(/[^\u4e00-\u9fff]/g, ""));
+    }) || null
+  );
+}
+
 async function translateZhToEn(text: string): Promise<string | null> {
   const provider = (process.env.TRANSLATE_PROVIDER || "mymemory").toLowerCase();
   if (provider === "none" || provider === "off") return null;
@@ -128,14 +150,7 @@ export async function POST(req: Request) {
       : "";
 
     // 1) 本地词表：英文精确 / 中文释义包含
-    const entry =
-      (qEn && candidates.find((e) => e.word.toLowerCase() === qEn)) ||
-      (qZh &&
-        candidates.find((e) => {
-          const g = (e.glossZh || "").replace(/\s+/g, "");
-          return g.includes(qZh) || qZh.includes(g.replace(/[^\u4e00-\u9fff]/g, ""));
-        })) ||
-      null;
+    const entry = matchLocalEntry(candidates, qEn, qZh);
 
     if (entry) {
       return jsonWithSession(
@@ -144,6 +159,9 @@ export async function POST(req: Request) {
           fromAsr,
           found: true,
           source: "local",
+          // 本地命中即已在当前用户某个 WordList 中，前端据此隐藏「加入词表」
+          inWordList: true,
+          localEntryId: entry.id,
           entry: serializeEntry(entry),
           enrich: null,
         },
@@ -170,6 +188,8 @@ export async function POST(req: Request) {
           fromAsr,
           found: false,
           source: "none",
+          inWordList: false,
+          localEntryId: null,
           message: "词库中无此词，且无法外网补全",
           warnings,
           enrich: null,
@@ -182,17 +202,27 @@ export async function POST(req: Request) {
     if (enrich.warnings?.length) warnings.push(...enrich.warnings);
 
     const hasContent = Boolean(enrich.glossZh || enrich.example || enrich.ipa);
+    // 外网词也可能已存在于词表（如中文释义未命中、但译出的英文词已在表中）
+    const existingLocal = hasContent
+      ? matchLocalEntry(candidates, normalizeEn(enrich.word || lemma), "")
+      : null;
     return jsonWithSession(
       {
         query: queryRaw,
         fromAsr,
         found: hasContent,
         source: hasContent ? "external" : "none",
-        message: hasContent ? "词库无此词，已从外网补全（可加入词表）" : "未找到",
+        inWordList: Boolean(existingLocal),
+        localEntryId: existingLocal?.id ?? null,
+        message: hasContent
+          ? existingLocal
+            ? "该词已在本地词表中，无需重复加入"
+            : "词库无此词，已从外网补全（可加入词表）"
+          : "未找到",
         warnings,
         entry: hasContent
           ? {
-              id: null,
+              id: existingLocal?.id ?? null,
               word: enrich.word || lemma,
               glossZh: enrich.glossZh,
               ipa: enrich.ipa,

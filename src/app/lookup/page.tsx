@@ -22,6 +22,8 @@ type LookupResult = {
   source?: string;
   message?: string;
   warnings?: string[];
+  inWordList?: boolean;
+  localEntryId?: string | null;
   entry?: EntryView | null;
   fromAsr?: boolean;
 };
@@ -52,6 +54,17 @@ export default function LookupPage() {
     setBusy(true);
     setError(null);
     setAddMsg(null);
+    // 查询前先停掉仍在进行的实时识别：先清引用再 await，避免查询期间继续写入输入框
+    const asr = asrRef.current;
+    asrRef.current = null;
+    if (asr) {
+      try {
+        await asr.stop();
+      } catch {
+        // 停止识别失败不应打断查询
+      }
+    }
+    setRecording(false);
     try {
       const res = await fetch("/api/lookup", {
         method: "POST",
@@ -78,8 +91,9 @@ export default function LookupPage() {
   async function startVoice() {
     setError(null);
     setAddMsg(null);
+    let session: RealtimeAsrSession | null = null;
     try {
-      const session = new RealtimeAsrSession(
+      session = new RealtimeAsrSession(
         {
           onPartial: (t) => {
             // 实时写入可编辑框（优先提取英文 lemma，否则保留全文）
@@ -100,8 +114,14 @@ export default function LookupPage() {
       );
       asrRef.current = session;
       await session.start();
+      if (asrRef.current !== session) {
+        // 启动期间用户已发起查询（或已离开），立即收尾，避免麦克风继续采集
+        await session.stop().catch(() => undefined);
+        return;
+      }
       setRecording(true);
     } catch (e) {
+      if (session && asrRef.current === session) asrRef.current = null;
       setMicOk(false);
       setError(e instanceof Error ? e.message : "无法开始实时识别");
     }
@@ -141,6 +161,8 @@ export default function LookupPage() {
         return;
       }
       setAddMsg(data.overwritten ? "已覆盖写入词表「查词收藏」" : "已加入词表「查词收藏」");
+      // 加入成功后该词已在词表中，隐藏「加入词表」按钮，避免重复加入
+      setResult((prev) => (prev ? { ...prev, inWordList: true } : prev));
     } catch {
       setError("加入词表失败");
     } finally {
@@ -260,14 +282,20 @@ export default function LookupPage() {
                   {result.entry.related.join(" · ")}
                 </p>
               )}
-              <button
-                type="button"
-                className="btn-primary w-full text-sm mt-1"
-                disabled={busy}
-                onClick={() => void addToList()}
-              >
-                加入词表
-              </button>
+              {result.inWordList ? (
+                <p className="text-xs text-[var(--muted)] bg-[var(--ok-soft)] px-2 py-1 rounded-md mt-1">
+                  该词已在你的词表中，无需重复加入
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-primary w-full text-sm mt-1"
+                  disabled={busy}
+                  onClick={() => void addToList()}
+                >
+                  加入词表
+                </button>
+              )}
             </>
           )}
         </div>

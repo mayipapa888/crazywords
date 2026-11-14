@@ -13,6 +13,17 @@ type SpeechStatus = {
   error?: string;
 };
 
+type ResetResponse = {
+  ok?: boolean;
+  deleted?: {
+    lists?: number;
+    cards?: number;
+    wrongs?: number;
+    sessions?: number;
+  };
+  error?: string;
+};
+
 export default function SettingsPage() {
   const [goal, setGoal] = useState(20);
   const [cloze, setCloze] = useState(true);
@@ -22,6 +33,9 @@ export default function SettingsPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [speech, setSpeech] = useState<SpeechStatus | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetMsg, setResetMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
     fetch("/api/me")
@@ -62,6 +76,33 @@ export default function SettingsPage() {
       setMsg("已保存");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function resetAll() {
+    if (!window.confirm("确定要清空所有词表和学习数据吗？此操作不可恢复。")) return;
+    setResetBusy(true);
+    setResetMsg(null);
+    try {
+      const res = await fetch("/api/admin/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: resetPassword }),
+      });
+      const data = (await res.json().catch(() => ({}))) as ResetResponse;
+      if (!res.ok) {
+        setResetMsg({ text: data.error || "清空失败", ok: false });
+        return;
+      }
+      setResetMsg({
+        text: `已清空，共删除 ${data.deleted?.lists ?? 0} 个词表`,
+        ok: true,
+      });
+      setResetPassword("");
+    } catch {
+      setResetMsg({ text: "清空失败，请稍后重试", ok: false });
+    } finally {
+      setResetBusy(false);
     }
   }
 
@@ -180,6 +221,51 @@ export default function SettingsPage() {
             <code className="rounded bg-[var(--chip)] px-1">TTS_*</code>
             ；开通「实时语音识别」与「语音合成」。缺密钥会报错，不会静默 mock。
           </p>
+        </div>
+
+        <div
+          className="shrink-0 rounded-lg border p-3"
+          style={{ borderColor: "var(--danger)", background: "var(--danger-soft)" }}
+        >
+          <p className="text-sm font-medium" style={{ color: "var(--danger)" }}>
+            危险操作
+          </p>
+          <p className="mt-0.5 text-xs text-[var(--muted)]">
+            清空当前账号的全部词表、卡片进度、错词本与练习会话，操作不可恢复。请输入管理密码确认。
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <input
+              type="password"
+              className="field max-w-[12rem] flex-1 py-1.5"
+              placeholder="管理密码"
+              aria-label="管理密码"
+              autoComplete="off"
+              value={resetPassword}
+              onChange={(e) => setResetPassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  if (!resetBusy) void resetAll();
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="rounded-md px-3 py-1.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:opacity-60"
+              style={{ background: "var(--danger)" }}
+              disabled={resetBusy}
+              onClick={() => void resetAll()}
+            >
+              {resetBusy ? "清空中…" : "清空所有词表"}
+            </button>
+            {resetMsg && (
+              <p
+                className={`text-sm ${resetMsg.ok ? "text-[var(--teal)]" : "text-[var(--danger)]"}`}
+              >
+                {resetMsg.text}
+              </p>
+            )}
+          </div>
         </div>
       </form>
 

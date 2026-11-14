@@ -107,7 +107,11 @@ export default function WordsPage() {
           </thead>
           <tbody className="divide-y divide-[var(--line)]">
             {pageRows.map((e) => (
-              <tr key={e.id}>
+              <tr
+                key={e.id}
+                title={e.example ? `例句：${e.example}` : undefined}
+                className="hover:bg-[var(--chip)]/50"
+              >
                 <td className="px-3 py-1.5 font-medium">
                   {e.word}
                   {e.pos && <span className="badge ml-2">{e.pos}</span>}

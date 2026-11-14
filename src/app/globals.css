@@ -33,7 +33,8 @@ body {
     radial-gradient(1200px 600px at 10% -10%, var(--glow-a), transparent 55%),
     radial-gradient(900px 500px at 100% 0%, var(--glow-b), transparent 50%),
     linear-gradient(180deg, #eef4f1 0%, var(--paper) 40%, #e9f0ec 100%);
-  font-family: var(--font-body), "Noto Sans SC", sans-serif;
+  font-family: "Microsoft YaHei", "微软雅黑", "PingFang SC", "Hiragino Sans GB",
+    "Segoe UI", sans-serif;
 }
 
 /* 不显示滚动条：内容仍可用滚轮/触控板滚动，但页面上没有任何滚动条可拖 */
@@ -48,7 +49,8 @@ body {
 }
 
 .font-display {
-  font-family: var(--font-display), "Noto Sans SC", sans-serif;
+  font-family: "Microsoft YaHei", "微软雅黑", "PingFang SC", "Hiragino Sans GB",
+    "Segoe UI", sans-serif;
 }
 
 @layer components {

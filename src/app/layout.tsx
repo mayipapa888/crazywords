@@ -1,20 +1,7 @@
 import type { Metadata } from "next";
-import { Noto_Sans_SC, Syne } from "next/font/google";
 import { AppShell } from "@/components/AppShell";
 import { SessionBootstrap } from "@/components/SessionBootstrap";
 import "./globals.css";
-
-const syne = Syne({
-  variable: "--font-display",
-  subsets: ["latin"],
-  weight: ["600", "700", "800"],
-});
-
-const noto = Noto_Sans_SC({
-  variable: "--font-body",
-  subsets: ["latin"],
-  weight: ["400", "500", "700"],
-});
 
 export const metadata: Metadata = {
   title: "CrazyWords — 语音听写背单词",
@@ -28,7 +15,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body className={`${syne.variable} ${noto.variable} antialiased`}>
+      <body className="antialiased">
         <SessionBootstrap>
           <AppShell>{children}</AppShell>
         </SessionBootstrap>
