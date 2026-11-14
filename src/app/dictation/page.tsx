@@ -152,6 +152,8 @@ export default function DictationPage() {
   const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** 开录后 N 秒内没有任何识别文本 → 自动停录并进入判定 */
+  const noTextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timersRef = useRef(timers);
   timersRef.current = timers;
 
@@ -167,10 +169,12 @@ export default function DictationPage() {
     if (autoSubmitTimer.current) clearTimeout(autoSubmitTimer.current);
     if (autoNextTimer.current) clearTimeout(autoNextTimer.current);
     if (tickTimer.current) clearInterval(tickTimer.current);
+    if (noTextTimer.current) clearTimeout(noTextTimer.current);
     autoStartTimer.current = null;
     autoSubmitTimer.current = null;
     autoNextTimer.current = null;
     tickTimer.current = null;
+    noTextTimer.current = null;
     setCountdown(null);
   }, []);
 
@@ -308,7 +312,7 @@ export default function DictationPage() {
   }, [clearTimers, items.length, sessionId]);
 
   const submitAttempt = useCallback(
-    async (transcriptOverride?: string) => {
+    async (transcriptOverride?: string, allowEmpty = false) => {
       if (!sessionId || !current || submitLock.current || feedback) return;
       submitLock.current = true;
       setBusy(true);
@@ -331,7 +335,7 @@ export default function DictationPage() {
               extractLemmaFromTranscript(live, current.word)
             : meaningRef.current.trim() || extractChineseFromTranscript(live);
 
-        if (!live.trim() && !spellingInput) {
+        if (!live.trim() && !spellingInput && !allowEmpty) {
           setError("未获得识别文本。请开口作答，或检查麦克风 / 实时识别配置。");
           setPhase("wait-record");
           // 无「立即开始录音」按钮：自动重新走开录计时
@@ -423,6 +427,10 @@ export default function DictationPage() {
       const session = new RealtimeAsrSession(
         {
           onPartial: (t) => {
+            if (noTextTimer.current) {
+              clearTimeout(noTextTimer.current);
+              noTextTimer.current = null;
+            }
             liveTextRef.current = t;
             setLiveText(t);
             if (m === "gloss") {
@@ -440,6 +448,10 @@ export default function DictationPage() {
             }
           },
           onFinal: (t) => {
+            if (noTextTimer.current) {
+              clearTimeout(noTextTimer.current);
+              noTextTimer.current = null;
+            }
             liveTextRef.current = t;
             setLiveText(t);
             if (m === "gloss") {
@@ -473,6 +485,18 @@ export default function DictationPage() {
       setRecording(true);
       setPhase("recording");
 
+      // 3 秒内没有任何识别文本 → 自动停录并直接进入判定（不再等 autoSubmitSeconds）
+      if (noTextTimer.current) clearTimeout(noTextTimer.current);
+      noTextTimer.current = setTimeout(() => {
+        noTextTimer.current = null;
+        if (liveTextRef.current.trim()) return;
+        void (async () => {
+          clearTimers();
+          await stopAsr();
+          await submitAttempt("", true);
+        })();
+      }, 3000);
+
       let left = timers.autoSubmitSeconds;
       setCountdown(`录音中，${left}s 后自动判定`);
       tickTimer.current = setInterval(() => {
@@ -493,17 +517,27 @@ export default function DictationPage() {
       setPhase("wait-record");
       setError(e instanceof Error ? e.message : "无法开始实时识别");
     }
-  }, [current, recording, feedback, timers.autoSubmitSeconds, submitAttempt]);
+  }, [
+    current,
+    recording,
+    feedback,
+    timers.autoSubmitSeconds,
+    submitAttempt,
+    clearTimers,
+    stopAsr,
+  ]);
 
   startRealtimeRef.current = startRealtime;
 
   const beginTimersAfterTts = useCallback(
-    (item: QueueItem) => {
+    (item: QueueItem, immediate = false) => {
       const m =
         item.mode === "meaning" || item.mode === "cloze" ? "meaning" : "gloss";
-      if (m === "meaning") {
+      // 模式 B 或重试场景：播报结束立刻开录
+      if (m === "meaning" || immediate) {
         setPhase("wait-record");
-        void startRealtime();
+        // 用 ref 派发，避免拿到上一轮渲染里被 feedback 守卫拦住的旧 startRealtime
+        void startRealtimeRef.current();
         return;
       }
 
@@ -521,10 +555,10 @@ export default function DictationPage() {
       }, 1000);
 
       autoStartTimer.current = setTimeout(() => {
-        void startRealtime();
+        void startRealtimeRef.current();
       }, timers.autoStartRecordSeconds * 1000);
     },
-    [timers.autoStartRecordSeconds, startRealtime],
+    [timers.autoStartRecordSeconds],
   );
 
   // 进入新题：先 TTS，结束后再计时（模式 A）/ 直接开录（模式 B）
@@ -577,7 +611,8 @@ export default function DictationPage() {
     void (async () => {
       await speakEntry(current);
       if (wordGen.current !== gen) return;
-      beginTimersAfterTts(current);
+      // 重试：播报结束立即开录，不再等 autoStartRecordSeconds
+      beginTimersAfterTts(current, true);
     })();
   }, [current, clearTimers, speakEntry, beginTimersAfterTts]);
 

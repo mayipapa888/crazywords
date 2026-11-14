@@ -58,8 +58,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       mode = parseMode(form.get("mode"));
       spellingInput = String(form.get("spellingInput") || "");
       skipAsr = String(form.get("skipAsr") || "") === "1";
-      if (form.get("realtimeTranscript")) {
-        realtimeTranscript = String(form.get("realtimeTranscript"));
+      if (form.has("realtimeTranscript")) {
+        realtimeTranscript = String(form.get("realtimeTranscript") ?? "");
       }
       const file = form.get("audio");
       if (file && file instanceof File) {
@@ -102,7 +102,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     let asrTranscript: string | null = null;
     let asrProvider = "unknown";
 
-    if (realtimeTranscript != null && realtimeTranscript.trim() !== "") {
+    if (realtimeTranscript != null) {
+      // 客户端显式上报了实时识别结果（可能是空串：开录后 3 秒没说话，按答错处理）
       asrTranscript = realtimeTranscript.trim();
       asrProvider =
         getSpeechProviderName() === "aliyun"
