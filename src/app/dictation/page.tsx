@@ -56,6 +56,9 @@ type Timers = {
 
 type Phase = "idle" | "tts" | "wait-record" | "recording" | "feedback";
 
+/** 出现识别文本后，连续静音多久自动结束录音并判定（ms） */
+const SILENCE_AFTER_SPEECH_MS = 3000;
+
 function playUtterance(text: string, lang: string): Promise<void> {
   return new Promise((resolve) => {
     try {
@@ -176,12 +179,23 @@ export default function DictationPage() {
   const spellingRef = useRef("");
   const meaningRef = useRef("");
   const startRealtimeRef = useRef<() => Promise<void>>(async () => undefined);
+  const submitAttemptRef = useRef<(transcriptOverride?: string) => Promise<void>>(
+    async () => undefined,
+  );
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-  /** 开录后 N 秒内没有任何识别文本 → 自动停录并进入判定 */
-  const noTextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 出现识别文本后才启动的静音计时器；每来一段新文本就重置 */
+  const silenceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 本轮开录后是否已经识别到过非空文本（没出声时绝不自动判错） */
+  const speechSeenRef = useRef(false);
+  /** 防止「自动开录」与「手动开始录音」并发启动两个 ASR 会话 */
+  const startingAsrRef = useRef(false);
+  /** ASR 会话代际：停止/切题/新开录时自增，旧回调与旧静音计时器据此失效 */
+  const asrGen = useRef(0);
+  /** 题目 TTS 音频：手动提前开录时要能立即停掉，避免录入播报声 */
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   /** 正解播报代际：点「重试本词 / 下一个」时自增，立即终止旧播报 */
   const answerGen = useRef(0);
   const answerAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -200,18 +214,19 @@ export default function DictationPage() {
     if (autoSubmitTimer.current) clearTimeout(autoSubmitTimer.current);
     if (autoNextTimer.current) clearTimeout(autoNextTimer.current);
     if (tickTimer.current) clearInterval(tickTimer.current);
-    if (noTextTimer.current) clearTimeout(noTextTimer.current);
+    if (silenceTimer.current) clearTimeout(silenceTimer.current);
     autoStartTimer.current = null;
     autoSubmitTimer.current = null;
     autoNextTimer.current = null;
     tickTimer.current = null;
-    noTextTimer.current = null;
+    silenceTimer.current = null;
     setCountdown(null);
   }, []);
 
-  const speakEntry = useCallback(async (item: QueueItem): Promise<void> => {
+  const speakEntry = useCallback(async (item: QueueItem, gen: number): Promise<void> => {
     const { text, lang } = dictationTtsText(item);
     if (!text) {
+      if (wordGen.current !== gen) return;
       setTtsNote("无可播报文本");
       return;
     }
@@ -222,6 +237,8 @@ export default function DictationPage() {
         body: JSON.stringify({ text, language: lang }),
       });
       const data = await res.json();
+      // 等待 TTS 期间用户已手动开录或切题：绝不再补播，避免录入播报声
+      if (wordGen.current !== gen) return;
       if (!res.ok) {
         const msg = data.error || "TTS 失败";
         setTtsNote(`TTS 失败：${msg}`);
@@ -234,7 +251,7 @@ export default function DictationPage() {
           : `阿里云 TTS · 仅朗读原文`,
       );
       if (data.audioBase64) {
-        await playAudioBase64(data.audioBase64, data.mimeType);
+        await playAudioBase64(data.audioBase64, data.mimeType, ttsAudioRef);
         return;
       }
       if (data.mock) {
@@ -244,6 +261,7 @@ export default function DictationPage() {
       setError("TTS 未返回音频。aliyun 模式必须使用阿里云语音合成。");
       setTtsNote("TTS 未返回音频");
     } catch (e) {
+      if (wordGen.current !== gen) return;
       const msg = e instanceof Error ? e.message : "TTS 调用失败";
       setTtsNote(msg);
       setError(msg);
@@ -255,6 +273,23 @@ export default function DictationPage() {
     answerGen.current += 1;
     const audio = answerAudioRef.current;
     answerAudioRef.current = null;
+    if (audio) {
+      try {
+        audio.pause();
+        audio.src = "";
+      } catch {
+        // 浏览器不允许操作时忽略
+      }
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
+
+  /** 立即终止正在进行的题目 TTS（音频 / 浏览器语音），手动提前开录时用 */
+  const stopTtsSpeech = useCallback(() => {
+    const audio = ttsAudioRef.current;
+    ttsAudioRef.current = null;
     if (audio) {
       try {
         audio.pause();
@@ -375,6 +410,12 @@ export default function DictationPage() {
   }
 
   const stopAsr = useCallback(async () => {
+    // 代际自增：本轮 ASR 的迟到回调与静音计时器全部作废
+    asrGen.current += 1;
+    if (silenceTimer.current) {
+      clearTimeout(silenceTimer.current);
+      silenceTimer.current = null;
+    }
     const s = asrRef.current;
     asrRef.current = null;
     if (s) await s.stop().catch(() => undefined);
@@ -405,7 +446,7 @@ export default function DictationPage() {
   }, [clearTimers, items.length, sessionId]);
 
   const submitAttempt = useCallback(
-    async (transcriptOverride?: string, allowEmpty = false) => {
+    async (transcriptOverride?: string) => {
       if (!sessionId || !current || submitLock.current || feedback) return;
       submitLock.current = true;
       setBusy(true);
@@ -428,16 +469,19 @@ export default function DictationPage() {
               extractLemmaFromTranscript(live, current.word)
             : meaningRef.current.trim() || extractChineseFromTranscript(live);
 
-        if (!live.trim() && !spellingInput && !allowEmpty) {
-          setError("未获得识别文本。请开口作答，或检查麦克风 / 实时识别配置。");
+        if (!live.trim() && !spellingInput) {
+          setError("未获得识别文本。请开口作答，或点「开始录音」重试。");
           setPhase("wait-record");
-          // 无「立即开始录音」按钮：自动重新走开录计时
+          // 空提交不判错：回到等待态，同时保留原有的自动开录兜底与手动按钮
           const mEmpty =
             current.mode === "meaning" || current.mode === "cloze"
               ? "meaning"
               : "gloss";
           if (mEmpty === "meaning") {
-            setTimeout(() => void startRealtimeRef.current(), 400);
+            autoStartTimer.current = setTimeout(() => {
+              autoStartTimer.current = null;
+              void startRealtimeRef.current();
+            }, 400);
           } else {
             let left = timersRef.current.autoStartRecordSeconds;
             setCountdown(`${left}s 后自动开始录音`);
@@ -451,6 +495,7 @@ export default function DictationPage() {
               }
             }, 1000);
             autoStartTimer.current = setTimeout(() => {
+              autoStartTimer.current = null;
               void startRealtimeRef.current();
             }, timersRef.current.autoStartRecordSeconds * 1000);
           }
@@ -483,11 +528,13 @@ export default function DictationPage() {
         }
 
         if (data.overallOk) {
-          // 正确：绿勾区 + 叮咚，随即下一词
+          // 正确：绿勾区 + 叮咚，随即下一词（计时器纳入 clearTimers 统一清理）
           playSuccessChime();
           setFeedback(data);
           setPhase("feedback");
-          setTimeout(() => {
+          if (autoNextTimer.current) clearTimeout(autoNextTimer.current);
+          autoNextTimer.current = setTimeout(() => {
+            autoNextTimer.current = null;
             setFeedback(null);
             nextWord();
           }, 700);
@@ -507,60 +554,62 @@ export default function DictationPage() {
     [sessionId, current, feedback, clearTimers, stopAsr, nextWord, speakAnswer],
   );
 
+  submitAttemptRef.current = submitAttempt;
+
   const startRealtime = useCallback(async () => {
-    if (!current || recording || feedback) return;
+    if (!current || recording || feedback || startingAsrRef.current) return;
+    startingAsrRef.current = true;
+    clearTimers();
     setError(null);
     setLiveText("");
     liveTextRef.current = "";
+    speechSeenRef.current = false;
     const m =
       current.mode === "meaning" || current.mode === "cloze"
         ? "meaning"
         : "gloss";
+    const gen = asrGen.current + 1;
+    asrGen.current = gen;
+
+    /** 出现新文本后重置 3 秒静音计时；静音满 3 秒自动停录并判定 */
+    const touchSpeech = () => {
+      if (silenceTimer.current) clearTimeout(silenceTimer.current);
+      silenceTimer.current = setTimeout(() => {
+        silenceTimer.current = null;
+        if (asrGen.current !== gen) return;
+        void submitAttemptRef.current();
+      }, SILENCE_AFTER_SPEECH_MS);
+    };
+
+    const applyRecognizedText = (t: string) => {
+      // 已停止 / 已切题：忽略迟到回调，避免旧会话污染新题
+      if (asrGen.current !== gen) return;
+      const text = t.trim();
+      if (!text) return;
+      liveTextRef.current = t;
+      setLiveText(t);
+      if (m === "gloss") {
+        const lemma = extractLemmaFromTranscript(t, current.word);
+        if (lemma) {
+          spellingRef.current = lemma;
+          setSpelling(lemma);
+        }
+      } else {
+        const zh = extractChineseFromTranscript(t);
+        if (zh) {
+          meaningRef.current = zh;
+          setMeaningText(zh);
+        }
+      }
+      speechSeenRef.current = true;
+      touchSpeech();
+    };
+
     try {
       const session = new RealtimeAsrSession(
         {
-          onPartial: (t) => {
-            if (noTextTimer.current) {
-              clearTimeout(noTextTimer.current);
-              noTextTimer.current = null;
-            }
-            liveTextRef.current = t;
-            setLiveText(t);
-            if (m === "gloss") {
-              const lemma = extractLemmaFromTranscript(t, current.word);
-              if (lemma) {
-                spellingRef.current = lemma;
-                setSpelling(lemma);
-              }
-            } else {
-              const zh = extractChineseFromTranscript(t);
-              if (zh) {
-                meaningRef.current = zh;
-                setMeaningText(zh);
-              }
-            }
-          },
-          onFinal: (t) => {
-            if (noTextTimer.current) {
-              clearTimeout(noTextTimer.current);
-              noTextTimer.current = null;
-            }
-            liveTextRef.current = t;
-            setLiveText(t);
-            if (m === "gloss") {
-              const lemma = extractLemmaFromTranscript(t, current.word);
-              if (lemma) {
-                spellingRef.current = lemma;
-                setSpelling(lemma);
-              }
-            } else {
-              const zh = extractChineseFromTranscript(t);
-              if (zh) {
-                meaningRef.current = zh;
-                setMeaningText(zh);
-              }
-            }
-          },
+          onPartial: applyRecognizedText,
+          onFinal: applyRecognizedText,
           onError: (e) => setError(e.message),
         },
         {
@@ -575,52 +624,66 @@ export default function DictationPage() {
       );
       asrRef.current = session;
       await session.start();
+      // 启动期间被手动结束 / 切题：立即收尾，绝不误设录音态
+      if (asrGen.current !== gen || asrRef.current !== session) {
+        await session.stop().catch(() => undefined);
+        return;
+      }
       setRecording(true);
       setPhase("recording");
 
-      // 3 秒内没有任何识别文本 → 自动停录并直接进入判定（不再等 autoSubmitSeconds）
-      if (noTextTimer.current) clearTimeout(noTextTimer.current);
-      noTextTimer.current = setTimeout(() => {
-        noTextTimer.current = null;
-        if (liveTextRef.current.trim()) return;
-        void (async () => {
-          clearTimers();
-          await stopAsr();
-          await submitAttempt("", true);
-        })();
-      }, 3000);
-
-      let left = timers.autoSubmitSeconds;
+      const autoSubmitSeconds = timersRef.current.autoSubmitSeconds;
+      let left = autoSubmitSeconds;
       setCountdown(`录音中，${left}s 后自动判定`);
       tickTimer.current = setInterval(() => {
         left -= 1;
         if (left <= 0) {
           if (tickTimer.current) clearInterval(tickTimer.current);
+          tickTimer.current = null;
           setCountdown(null);
         } else {
           setCountdown(`录音中，${left}s 后自动判定`);
         }
       }, 1000);
+
+      // 兜底上限：有识别文本才提交；一直没出声时不判错，保持录音等手动操作
       autoSubmitTimer.current = setTimeout(() => {
-        void submitAttempt();
-      }, timers.autoSubmitSeconds * 1000);
+        autoSubmitTimer.current = null;
+        if (asrGen.current !== gen) return;
+        if (!speechSeenRef.current) {
+          setCountdown("等待语音：请开口，或点「结束并判定」");
+          return;
+        }
+        void submitAttemptRef.current();
+      }, autoSubmitSeconds * 1000);
     } catch (e) {
+      if (asrGen.current !== gen) return;
       setRecording(false);
       setMicOk(false);
       setPhase("wait-record");
       setError(e instanceof Error ? e.message : "无法开始实时识别");
+    } finally {
+      startingAsrRef.current = false;
     }
-  }, [
-    current,
-    recording,
-    feedback,
-    timers.autoSubmitSeconds,
-    submitAttempt,
-    clearTimers,
-    stopAsr,
-  ]);
+  }, [current, recording, feedback, clearTimers]);
 
   startRealtimeRef.current = startRealtime;
+
+  /** 等待阶段（含 tts 播报中）点「开始录音」：立即停掉播报并开录 */
+  const manualStartRecording = useCallback(() => {
+    if (!current || recording || feedback) return;
+    clearTimers();
+    // 作废尚未结束的 TTS 后续流程，避免播报结束后再触发一次自动开录
+    wordGen.current += 1;
+    stopTtsSpeech();
+    setPhase("wait-record");
+    void startRealtimeRef.current();
+  }, [current, recording, feedback, clearTimers, stopTtsSpeech]);
+
+  /** 录音中点「结束并判定」：submitAttempt 内部会 stopAsr 并走原有判定流程 */
+  const endRecordingAndJudge = useCallback(() => {
+    void submitAttemptRef.current();
+  }, []);
 
   const beginTimersAfterTts = useCallback(
     (item: QueueItem, immediate = false) => {
@@ -672,7 +735,7 @@ export default function DictationPage() {
     setCountdown("正在播报…");
 
     void (async () => {
-      await speakEntry(current);
+      await speakEntry(current, gen);
       if (wordGen.current !== gen) return;
       beginTimersAfterTts(current);
     })();
@@ -681,6 +744,7 @@ export default function DictationPage() {
       wordGen.current += 1;
       clearTimers();
       void stopAsr();
+      stopTtsSpeech();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, index, current?.entryId]);
@@ -702,7 +766,7 @@ export default function DictationPage() {
     setPhase("tts");
     setCountdown("正在播报…");
     void (async () => {
-      await speakEntry(current);
+      await speakEntry(current, gen);
       if (wordGen.current !== gen) return;
       // 重试：播报结束立即开录，不再等 autoStartRecordSeconds
       beginTimersAfterTts(current, true);
@@ -714,8 +778,9 @@ export default function DictationPage() {
       clearTimers();
       void stopAsr();
       stopAnswerSpeech();
+      stopTtsSpeech();
     };
-  }, [clearTimers, stopAsr, stopAnswerSpeech]);
+  }, [clearTimers, stopAsr, stopAnswerSpeech, stopTtsSpeech]);
 
   if (!micOk) {
     return (
@@ -863,6 +928,25 @@ export default function DictationPage() {
             <span className="rounded bg-[var(--accent-soft)] px-2 py-1 text-xs text-[var(--accent)]">
               {countdown}
             </span>
+          )}
+          {!feedback && !recording && !busy && (phase === "tts" || phase === "wait-record") && (
+            <button
+              type="button"
+              className="btn-primary px-2 py-0.5 text-xs"
+              onClick={manualStartRecording}
+            >
+              ▶ 开始录音
+            </button>
+          )}
+          {!feedback && recording && (
+            <button
+              type="button"
+              className="btn-secondary px-2 py-0.5 text-xs"
+              disabled={busy}
+              onClick={endRecordingAndJudge}
+            >
+              ■ 结束并判定
+            </button>
           )}
         </div>
 
