@@ -65,11 +65,9 @@ const MAX_SYNONYMS = 8;
 const MAX_ANTONYMS = 8;
 const MAX_EXAMPLES = 3;
 const MAX_PHRASES = 6;
-const MAX_SENSES = 4;
-/** 每个词性最多缓存的候选义项；输出总数仍受 MAX_SENSES 限制 */
-const MAX_SENSES_PER_POS = 4;
-/** 第一轮每个词性优先取的高频义项数（词典 definition 顺序即常用度顺序） */
-const MAX_SENSES_PRIMARY_PER_POS = 2;
+const MAX_SENSES = 9;
+/** 每种词性最多返回 3 个不同的常用义项 */
+const MAX_SENSES_PER_POS = 3;
 const MAX_SENSE_GLOSS_SEGMENTS = 3;
 const MAX_GLOSS_SEGMENTS = 15;
 
@@ -231,8 +229,8 @@ function cleanDefinition(raw: string): string | null {
 
 /**
  * 单词语义聚合：按词性分组，实词优先（动词→名词→形容词→副词）。
- * 每个词性第一轮先取前 2 条高频 definition，总数不足 4 条时再从同一词性补足；
- * 生僻（obsolete/archaic 等）与重复 definition 直接丢弃，总数上限 4 条。
+ * 每种词性最多返回 3 条不同的常用 definition（词典顺序即常用度顺序）；
+ * 生僻（obsolete/archaic 等）与重复 definition 直接丢弃，总数安全上限 9 条。
  * 只取词典真实存在的定义，不做任何补写。
  */
 function aggregateSenses(meanings: FreeDictMeaning[]): RawSense[] {
@@ -270,17 +268,10 @@ function aggregateSenses(meanings: FreeDictMeaning[]): RawSense[] {
   for (const pos of POS_PRIORITY) if (groups.has(pos)) orderedPos.push(pos);
   for (const pos of groups.keys()) if (!orderedPos.includes(pos)) orderedPos.push(pos);
 
+  // 按词性优先级输出，每种词性最多 3 条
   const out: RawSense[] = [];
-  // 第一轮：按词性优先级各取前 2 条，保证动词/名词等实词的高频义项优先
   for (const pos of orderedPos) {
-    for (const sense of (groups.get(pos) ?? []).slice(0, MAX_SENSES_PRIMARY_PER_POS)) {
-      out.push(sense);
-      if (out.length >= MAX_SENSES) return out;
-    }
-  }
-  // 第二轮：义项不足 4 条时用同词性的后续义项补足（例如只有动词词性的词）
-  for (const pos of orderedPos) {
-    for (const sense of (groups.get(pos) ?? []).slice(MAX_SENSES_PRIMARY_PER_POS)) {
+    for (const sense of (groups.get(pos) ?? []).slice(0, MAX_SENSES_PER_POS)) {
       out.push(sense);
       if (out.length >= MAX_SENSES) return out;
     }

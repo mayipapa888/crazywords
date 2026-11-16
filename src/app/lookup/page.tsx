@@ -256,7 +256,7 @@ export default function LookupPage() {
   const synonyms = entry?.synonyms ?? [];
   const antonyms = entry?.antonyms ?? [];
   const related = entry?.related ?? [];
-  const senses = (entry?.senses ?? []).slice(0, 4);
+  const senses = (entry?.senses ?? []).slice(0, 9);
   // 本地词条没有 synonyms 字段，用 related 兜底；外网 related 是 synonyms 子集，避免重复展示
   const showRelated = synonyms.length === 0 && related.length > 0;
 
