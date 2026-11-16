@@ -9,6 +9,14 @@ import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
 type DictationMode = "gloss" | "meaning";
 
+type QueueSource = "today" | "random" | "wrong";
+
+const RANGE_OPTIONS: { value: QueueSource; label: string }[] = [
+  { value: "today", label: "今日队列（推荐）" },
+  { value: "random", label: "随机 20 个" },
+  { value: "wrong", label: "错词本" },
+];
+
 type QueueItem = {
   entryId: string;
   word: string;
@@ -122,6 +130,8 @@ export default function DictationPage() {
   const [micOk, setMicOk] = useState(false);
   /** 用户点选的听写模式（页面按钮，不依赖设置开关） */
   const [selectedMode, setSelectedMode] = useState<DictationMode>("gloss");
+  /** 听写范围：今日队列 / 随机 20 个 / 错词本 */
+  const [source, setSource] = useState<QueueSource>("today");
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [items, setItems] = useState<QueueItem[]>([]);
   const [index, setIndex] = useState(0);
@@ -285,7 +295,11 @@ export default function DictationPage() {
     try {
       const [meRes, sessRes] = await Promise.all([
         fetch("/api/me"),
-        fetch("/api/sessions", { method: "POST" }),
+        fetch("/api/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ source }),
+        }),
       ]);
       const me = await meRes.json();
       const data = await sessRes.json();
@@ -302,8 +316,16 @@ export default function DictationPage() {
       }
       // 用户点选的模式覆盖队列里的 mode
       const rawItems = (data.items || []) as QueueItem[];
+      if (rawItems.length === 0) {
+        setError(
+          source === "wrong" ? "错词本没有可听写的词" : "当前范围没有可听写的词",
+        );
+        return;
+      }
       setSessionId(data.sessionId);
       setItems(rawItems.map((it) => ({ ...it, mode: selectedMode })));
+    } catch {
+      setError("无法开始会话");
     } finally {
       setBusy(false);
     }
@@ -692,6 +714,26 @@ export default function DictationPage() {
               <span className="font-display block text-base">模式 B</span>
               <span className="text-xs text-[var(--muted)]">单词 → 说中文</span>
             </button>
+          </div>
+
+          <div className="space-y-1">
+            <p className="label mb-0">听写范围</p>
+            <div className="grid grid-cols-3 gap-2">
+              {RANGE_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`rounded-lg border px-2 py-1.5 text-center text-xs transition ${
+                    source === option.value
+                      ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                      : "border-[var(--line)] hover:border-[var(--accent)]"
+                  }`}
+                  onClick={() => setSource(option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {error && (

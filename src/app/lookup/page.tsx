@@ -72,6 +72,8 @@ export default function LookupPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [addMsg, setAddMsg] = useState<string | null>(null);
+  const [wrongAdded, setWrongAdded] = useState(false);
+  const [wrongError, setWrongError] = useState<string | null>(null);
   const asrRef = useRef<RealtimeAsrSession | null>(null);
   const textRef = useRef("");
 
@@ -90,6 +92,8 @@ export default function LookupPage() {
     setBusy(true);
     setError(null);
     setAddMsg(null);
+    setWrongAdded(false);
+    setWrongError(null);
     // 查询前先停掉仍在进行的实时识别：先清引用再 await，避免查询期间继续写入输入框
     const asr = asrRef.current;
     asrRef.current = null;
@@ -205,6 +209,38 @@ export default function LookupPage() {
       setResult((prev) => (prev ? { ...prev, inWordList: true } : prev));
     } catch {
       setError("加入词表失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addToWrongBook() {
+    const e = result?.entry;
+    if (!e?.word) return;
+    setBusy(true);
+    setWrongError(null);
+    try {
+      const res = await fetch("/api/wrong-book", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          word: e.word,
+          glossZh: e.glossZh,
+          ipa: e.ipa,
+          pos: e.pos,
+          example: e.example,
+          phrases: e.phrases,
+          related: e.related,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setWrongError(data.error || "加入错词本失败");
+        return;
+      }
+      setWrongAdded(true);
+    } catch {
+      setWrongError("加入错词本失败");
     } finally {
       setBusy(false);
     }
@@ -381,19 +417,35 @@ export default function LookupPage() {
                   )}
                 </div>
               )}
-              {result.inWordList ? (
-                <p className="text-xs text-[var(--muted)] bg-[var(--ok-soft)] px-2 py-1 rounded-md mt-1">
-                  该词已在你的词表中，无需重复加入
-                </p>
-              ) : (
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {result.inWordList ? (
+                  <p className="flex-1 text-xs text-[var(--muted)] bg-[var(--ok-soft)] px-2 py-1 rounded-md">
+                    该词已在你的词表中，无需重复加入
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-primary min-w-[8rem] flex-1 text-sm"
+                    disabled={busy}
+                    onClick={() => void addToList()}
+                  >
+                    加入词表
+                  </button>
+                )}
+                {/* 错词本与词表相互独立：已在词表里也允许加入错词本 */}
                 <button
                   type="button"
-                  className="btn-primary w-full text-sm mt-1"
-                  disabled={busy}
-                  onClick={() => void addToList()}
+                  className="btn-secondary shrink-0 text-sm"
+                  disabled={busy || wrongAdded}
+                  onClick={() => void addToWrongBook()}
                 >
-                  加入词表
+                  {wrongAdded ? "已加入错词本" : "加入错词本"}
                 </button>
+              </div>
+              {wrongError && (
+                <p className="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-2 py-1 rounded-md">
+                  {wrongError}
+                </p>
               )}
             </>
           )}
