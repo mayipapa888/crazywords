@@ -74,8 +74,17 @@ export default function LookupPage() {
   const [addMsg, setAddMsg] = useState<string | null>(null);
   const [wrongAdded, setWrongAdded] = useState(false);
   const [wrongError, setWrongError] = useState<string | null>(null);
+  // 就地编辑「基本意思」：草稿只在编辑态生效，保存成功后才写回 result.entry.glossZh
+  const [editingGloss, setEditingGloss] = useState(false);
+  const [glossDraft, setGlossDraft] = useState("");
+  const [savingGloss, setSavingGloss] = useState(false);
+  const [glossError, setGlossError] = useState<string | null>(null);
+  const [glossMsg, setGlossMsg] = useState<string | null>(null);
   const asrRef = useRef<RealtimeAsrSession | null>(null);
   const textRef = useRef("");
+  // 当前展示的单词：异步保存返回时用它判断用户是否已经查了别的词
+  const currentWordRef = useRef<string | null>(null);
+  currentWordRef.current = result?.entry?.word ?? null;
 
   useEffect(() => {
     return () => {
@@ -94,6 +103,11 @@ export default function LookupPage() {
     setAddMsg(null);
     setWrongAdded(false);
     setWrongError(null);
+    // 新查询会替换 result，编辑态与旧草稿一并丢弃，避免把释义写到别的词上
+    setEditingGloss(false);
+    setGlossDraft("");
+    setGlossError(null);
+    setGlossMsg(null);
     // 查询前先停掉仍在进行的实时识别：先清引用再 await，避免查询期间继续写入输入框
     const asr = asrRef.current;
     asrRef.current = null;
@@ -205,8 +219,15 @@ export default function LookupPage() {
         return;
       }
       setAddMsg(data.overwritten ? "已覆盖写入词表「查词收藏」" : "已加入词表「查词收藏」");
-      // 加入成功后该词已在词表中，隐藏「加入词表」按钮，避免重复加入
-      setResult((prev) => (prev ? { ...prev, inWordList: true } : prev));
+      // 加入成功后该词已在词表中，隐藏「加入词表」按钮，避免重复加入；
+      // 记下新建/命中的 entryId，之后改释义可直接走 PATCH 而不用再 upsert
+      const addedEntryId =
+        typeof data.lastEntryId === "string" && data.lastEntryId ? data.lastEntryId : null;
+      setResult((prev) =>
+        prev
+          ? { ...prev, inWordList: true, localEntryId: addedEntryId ?? prev.localEntryId ?? null }
+          : prev,
+      );
     } catch {
       setError("加入词表失败");
     } finally {
@@ -243,6 +264,111 @@ export default function LookupPage() {
       setWrongError("加入错词本失败");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** 保存成功后把新释义写回页面状态；若用户已查了别的词（word 不一致）则忽略 */
+  function applySavedGloss(word: string, glossZh: string, entryId: string | null) {
+    setResult((prev) => {
+      if (!prev?.entry || prev.entry.word !== word) return prev;
+      return {
+        ...prev,
+        inWordList: true,
+        localEntryId: entryId ?? prev.localEntryId ?? null,
+        entry: { ...prev.entry, id: entryId ?? prev.entry.id, glossZh },
+      };
+    });
+  }
+
+  function startEditGloss() {
+    const e = result?.entry;
+    if (!e || busy || savingGloss) return;
+    setGlossDraft(e.glossZh ?? "");
+    setGlossError(null);
+    setGlossMsg(null);
+    setEditingGloss(true);
+  }
+
+  function cancelEditGloss() {
+    setEditingGloss(false);
+    setGlossError(null);
+    setGlossDraft(result?.entry?.glossZh ?? "");
+  }
+
+  /**
+   * 保存「基本意思」：
+   * - localEntryId 非空（词已在用户词表）→ PATCH /api/entries/{id}，只带 glossZh（该路由支持部分更新）
+   * - 为空（外网词/不在词库）→ POST /api/entries/manual 新建，用返回的 lastEntryId 回填 localEntryId
+   */
+  async function saveGloss() {
+    const e = result?.entry;
+    if (!e || savingGloss) return;
+    const next = glossDraft.trim();
+    if (!next) {
+      setGlossError("释义不能为空");
+      return;
+    }
+    if (next === (e.glossZh ?? "").trim()) {
+      // 没有改动：直接收起，不发请求
+      setEditingGloss(false);
+      setGlossError(null);
+      return;
+    }
+    const word = e.word;
+    const localEntryId = result?.localEntryId ?? null;
+    setSavingGloss(true);
+    setGlossError(null);
+    setGlossMsg(null);
+    try {
+      if (localEntryId) {
+        const res = await fetch(`/api/entries/${encodeURIComponent(localEntryId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ glossZh: next }),
+        });
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          setGlossError(data.error || "保存释义失败");
+          return; // 保留编辑态与用户输入
+        }
+        applySavedGloss(word, next, null);
+      } else {
+        const res = await fetch("/api/entries/manual", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            listName: "查词收藏",
+            word,
+            glossZh: next,
+            ipa: e.ipa,
+            pos: e.pos,
+            example: e.example,
+            phrases: e.phrases,
+            related: e.related,
+          }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          lastEntryId?: string | null;
+        };
+        if (!res.ok) {
+          setGlossError(data.error || "保存释义失败");
+          return; // 保留编辑态与用户输入
+        }
+        const newEntryId =
+          typeof data.lastEntryId === "string" && data.lastEntryId ? data.lastEntryId : null;
+        applySavedGloss(word, next, newEntryId);
+      }
+      // 保存期间用户可能已发起新查询：只在仍展示同一个词时才退出编辑态并提示
+      if (currentWordRef.current === word) {
+        setGlossDraft(next);
+        setEditingGloss(false);
+        setGlossMsg("已保存");
+      }
+    } catch {
+      setGlossError("保存失败，请检查网络后重试");
+    } finally {
+      setSavingGloss(false);
     }
   }
 
@@ -351,9 +477,75 @@ export default function LookupPage() {
                 )}
               </p>
               {result.entry.ipa && <p className="text-xs text-[var(--muted)]">{result.entry.ipa}</p>}
-              <p className="whitespace-pre-line break-words text-sm leading-relaxed">
-                {result.entry.glossZh}
-              </p>
+              {editingGloss ? (
+                <div className="space-y-1">
+                  <div className="flex items-start gap-2">
+                    <textarea
+                      className="field min-h-[2.5rem] max-h-24 min-w-0 flex-1 resize-none text-sm leading-relaxed"
+                      rows={2}
+                      value={glossDraft}
+                      autoFocus
+                      disabled={savingGloss}
+                      aria-label="编辑基本意思（中文释义）"
+                      onChange={(ev) => setGlossDraft(ev.target.value)}
+                      onKeyDown={(ev) => {
+                        if (ev.key === "Escape") {
+                          ev.preventDefault();
+                          cancelEditGloss();
+                          return;
+                        }
+                        if (ev.key === "Enter" && !ev.shiftKey) {
+                          ev.preventDefault();
+                          void saveGloss();
+                        }
+                      }}
+                    />
+                    <div className="flex shrink-0 flex-col gap-1">
+                      <button
+                        type="button"
+                        className="btn-primary px-2 py-1 text-xs"
+                        disabled={savingGloss}
+                        onClick={() => void saveGloss()}
+                      >
+                        {savingGloss ? "保存中…" : "保存"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary px-2 py-1 text-xs"
+                        disabled={savingGloss}
+                        onClick={cancelEditGloss}
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                  {glossError && (
+                    <p className="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-2 py-1 rounded-md">
+                      {glossError}
+                    </p>
+                  )}
+                  <p className="text-[11px] text-[var(--muted)]">回车保存，Shift+回车换行，Esc 取消</p>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2">
+                  <p className="min-w-0 flex-1 whitespace-pre-line break-words text-sm leading-relaxed">
+                    {result.entry.glossZh || (
+                      <span className="text-[var(--muted)]">（暂无中文释义，可点「编辑」补充）</span>
+                    )}
+                  </p>
+                  {glossMsg && (
+                    <span className="shrink-0 text-xs text-[var(--ok)]">{glossMsg}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="badge shrink-0 cursor-pointer text-[var(--teal)] hover:bg-[var(--teal-soft)] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={busy || savingGloss}
+                    onClick={startEditGloss}
+                  >
+                    编辑
+                  </button>
+                </div>
+              )}
               {(senses.length > 0 ||
                 exampleLines.length > 0 ||
                 phrases.length > 0 ||
