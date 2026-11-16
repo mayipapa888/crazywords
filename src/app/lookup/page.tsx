@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MicGate } from "@/components/MicGate";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
 import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
@@ -38,8 +37,35 @@ type LookupResult = {
   fromAsr?: boolean;
 };
 
+/**
+ * 把 getUserMedia / 实时识别抛出的错误翻成页面内一行中文提示。
+ * 只有点「开始语音识别」时才会走到这里；失败不影响手动输入查词。
+ */
+function micErrorMessage(err: unknown): string {
+  if (err instanceof DOMException) {
+    switch (err.name) {
+      case "NotAllowedError":
+      case "PermissionDeniedError":
+        return "麦克风权限被拒绝：请在浏览器地址栏允许麦克风后重试。仍可手动输入查词。";
+      case "NotFoundError":
+      case "DevicesNotFoundError":
+        return "未检测到麦克风设备。仍可手动输入查词。";
+      case "NotReadableError":
+      case "TrackStartError":
+        return "麦克风被其他程序占用或无法读取。仍可手动输入查词。";
+      case "SecurityError":
+        return "当前页面无法访问麦克风（需 HTTPS 或 localhost）。仍可手动输入查词。";
+      case "AbortError":
+        return "麦克风启动被中断，请重试或手动输入查词。";
+      default:
+        break;
+    }
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return "无法开始实时识别，仍可手动输入查词。";
+}
+
 export default function LookupPage() {
-  const [micOk, setMicOk] = useState(false);
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
   const [result, setResult] = useState<LookupResult | null>(null);
@@ -101,6 +127,11 @@ export default function LookupPage() {
   async function startVoice() {
     setError(null);
     setAddMsg(null);
+    // 仅在此按钮回调里触碰麦克风：进入页面、打字、查词都不会申请权限
+    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError("当前环境不支持麦克风（需 HTTPS 或 localhost）。仍可手动输入查词。");
+      return;
+    }
     let session: RealtimeAsrSession | null = null;
     try {
       session = new RealtimeAsrSession(
@@ -132,8 +163,7 @@ export default function LookupPage() {
       setRecording(true);
     } catch (e) {
       if (session && asrRef.current === session) asrRef.current = null;
-      setMicOk(false);
-      setError(e instanceof Error ? e.message : "无法开始实时识别");
+      setError(micErrorMessage(e));
     }
   }
 
@@ -190,7 +220,7 @@ export default function LookupPage() {
   const synonyms = entry?.synonyms ?? [];
   const antonyms = entry?.antonyms ?? [];
   const related = entry?.related ?? [];
-  const senses = (entry?.senses ?? []).slice(0, 5);
+  const senses = (entry?.senses ?? []).slice(0, 4);
   // 本地词条没有 synonyms 字段，用 related 兜底；外网 related 是 synonyms 子集，避免重复展示
   const showRelated = synonyms.length === 0 && related.length > 0;
 
@@ -203,65 +233,62 @@ export default function LookupPage() {
         </p>
       </div>
 
-      {!micOk ? (
-        <MicGate title="查词需要麦克风" onGranted={() => setMicOk(true)} />
-      ) : (
-        <div className="panel p-3 space-y-2 shrink-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="label shrink-0 mb-0">查询（可编辑）</label>
-            <input
-              className="field flex-1 min-w-[10rem] text-sm"
-              value={text}
-              onChange={(e) => {
-                textRef.current = e.target.value;
-                setText(e.target.value);
-              }}
-              placeholder="说英语单词或中文释义，或直接输入"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void runLookup(text);
-              }}
-            />
-            {!recording ? (
-              <button
-                type="button"
-                className="btn-secondary text-sm shrink-0"
-                disabled={busy}
-                onClick={() => void startVoice()}
-              >
-                开始语音识别
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="btn-accent text-sm shrink-0"
-                disabled={busy}
-                onClick={() => void stopVoice()}
-              >
-                停止识别
-              </button>
-            )}
+      {/* 不在这里申请麦克风：输入框和查词按钮先可用，点「开始语音识别」才 getUserMedia */}
+      <div className="panel p-3 space-y-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="label shrink-0 mb-0">查询（可编辑）</label>
+          <input
+            className="field flex-1 min-w-[10rem] text-sm"
+            value={text}
+            onChange={(e) => {
+              textRef.current = e.target.value;
+              setText(e.target.value);
+            }}
+            placeholder="说英语单词或中文释义，或直接输入"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void runLookup(text);
+            }}
+          />
+          {!recording ? (
             <button
               type="button"
-              className="btn-primary text-sm shrink-0"
-              disabled={busy || !text.trim()}
-              onClick={() => void runLookup(text)}
+              className="btn-secondary text-sm shrink-0"
+              disabled={busy}
+              onClick={() => void startVoice()}
             >
-              {busy ? "查询中…" : "确定查询"}
+              开始语音识别
             </button>
-          </div>
-          {recording && (
-            <p className="text-xs text-[var(--accent)]">实时识别中…可随时改字后点「确定查询」</p>
+          ) : (
+            <button
+              type="button"
+              className="btn-accent text-sm shrink-0"
+              disabled={busy}
+              onClick={() => void stopVoice()}
+            >
+              停止识别
+            </button>
           )}
-          {error && (
-            <p className="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-2 py-1 rounded-md">
-              {error}
-            </p>
-          )}
-          {addMsg && (
-            <p className="text-xs text-[var(--ok)] bg-[var(--ok-soft)] px-2 py-1 rounded-md">{addMsg}</p>
-          )}
+          <button
+            type="button"
+            className="btn-primary text-sm shrink-0"
+            disabled={busy || !text.trim()}
+            onClick={() => void runLookup(text)}
+          >
+            {busy ? "查询中…" : "确定查询"}
+          </button>
         </div>
-      )}
+        {recording && (
+          <p className="text-xs text-[var(--accent)]">实时识别中…可随时改字后点「确定查询」</p>
+        )}
+        {error && (
+          <p className="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-2 py-1 rounded-md">
+            {error}
+          </p>
+        )}
+        {addMsg && (
+          <p className="text-xs text-[var(--ok)] bg-[var(--ok-soft)] px-2 py-1 rounded-md">{addMsg}</p>
+        )}
+      </div>
 
       {result && (
         <div className="panel p-3 space-y-2 min-h-0 flex-1 overflow-y-auto no-scrollbar">

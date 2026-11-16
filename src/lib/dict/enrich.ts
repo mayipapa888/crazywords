@@ -65,8 +65,11 @@ const MAX_SYNONYMS = 8;
 const MAX_ANTONYMS = 8;
 const MAX_EXAMPLES = 3;
 const MAX_PHRASES = 6;
-const MAX_SENSES = 5;
-const MAX_SENSES_PER_POS = 2;
+const MAX_SENSES = 4;
+/** 每个词性最多缓存的候选义项；输出总数仍受 MAX_SENSES 限制 */
+const MAX_SENSES_PER_POS = 4;
+/** 第一轮每个词性优先取的高频义项数（词典 definition 顺序即常用度顺序） */
+const MAX_SENSES_PRIMARY_PER_POS = 2;
 const MAX_SENSE_GLOSS_SEGMENTS = 3;
 const MAX_GLOSS_SEGMENTS = 15;
 
@@ -82,6 +85,10 @@ const PHRASE_PREPOSITIONS = "to|with|for|on|in|at|of|from|by|about|into|upon";
 
 // 义项按词性优先级排列：动词最常用，其次是名词/形容词/副词
 const POS_PRIORITY = ["verb", "noun", "adjective", "adverb"];
+
+/** 生僻/历史/方言等标签的义项（外网释义常见 "(obsolete)"、"(archaic)" 前缀），聚合时丢弃 */
+const RARE_DEFINITION_RE =
+  /^\((?:obsolete|archaic|rare|dated|dialect|dialectal|nonstandard|historical|heraldry|nautical)\b/i;
 
 /**
  * 常见繁体 → 简体单字映射（不引新依赖）。只覆盖词典释义里高频出现的字，
@@ -223,7 +230,9 @@ function cleanDefinition(raw: string): string | null {
 }
 
 /**
- * 多义项聚合：按词性分组，动词优先；每个词性最多 2 条不同 definition，总数最多 5 条。
+ * 单词语义聚合：按词性分组，实词优先（动词→名词→形容词→副词）。
+ * 每个词性第一轮先取前 2 条高频 definition，总数不足 4 条时再从同一词性补足；
+ * 生僻（obsolete/archaic 等）与重复 definition 直接丢弃，总数上限 4 条。
  * 只取词典真实存在的定义，不做任何补写。
  */
 function aggregateSenses(meanings: FreeDictMeaning[]): RawSense[] {
@@ -242,6 +251,8 @@ function aggregateSenses(meanings: FreeDictMeaning[]): RawSense[] {
       if (bucket.length >= MAX_SENSES_PER_POS) break;
       const rawDef = definition.definition?.trim();
       if (!rawDef) continue;
+      // 生僻义项（obsolete/archaic/rare/dialect 等）不进入常用义项
+      if (RARE_DEFINITION_RE.test(rawDef)) continue;
       const defEn = cleanDefinition(rawDef);
       if (!defEn) continue;
       const dedupeKey = defEn
@@ -260,13 +271,41 @@ function aggregateSenses(meanings: FreeDictMeaning[]): RawSense[] {
   for (const pos of groups.keys()) if (!orderedPos.includes(pos)) orderedPos.push(pos);
 
   const out: RawSense[] = [];
+  // 第一轮：按词性优先级各取前 2 条，保证动词/名词等实词的高频义项优先
   for (const pos of orderedPos) {
-    for (const sense of groups.get(pos) ?? []) {
+    for (const sense of (groups.get(pos) ?? []).slice(0, MAX_SENSES_PRIMARY_PER_POS)) {
+      out.push(sense);
+      if (out.length >= MAX_SENSES) return out;
+    }
+  }
+  // 第二轮：义项不足 4 条时用同词性的后续义项补足（例如只有动词词性的词）
+  for (const pos of orderedPos) {
+    for (const sense of (groups.get(pos) ?? []).slice(MAX_SENSES_PRIMARY_PER_POS)) {
       out.push(sense);
       if (out.length >= MAX_SENSES) return out;
     }
   }
   return out;
+}
+
+/** 词性标签归一化：去掉结尾句点、统一小写，便于比较 "verb." 与 "verb" */
+function normalizePos(pos: string | null | undefined): string {
+  return (pos || "").trim().toLowerCase().replace(/\.$/, "");
+}
+
+/**
+ * 多词短语只保留与中心词主要词性一致的义项，且最多 1 条。
+ * 例：keep up with 的中心词 keep 主要词性是动词，就只留 1 条动词义项，
+ * 丢掉「城堡主塔」「生活费」这类名词义项；中心词词性未知时也最多留 1 条。
+ */
+function pickPhraseSenses(senses: RawSense[], mainPos: string | null): RawSense[] {
+  if (senses.length === 0) return [];
+  const main = normalizePos(mainPos);
+  if (main) {
+    const matched = senses.filter((sense) => normalizePos(sense.pos) === main);
+    if (matched.length > 0) return matched.slice(0, 1);
+  }
+  return senses.slice(0, 1);
 }
 
 async function fetchFreeDictionary(
@@ -514,7 +553,7 @@ function truncateEn(text: string | null | undefined, max = 90): string | null {
   return `${(stop > 40 ? cut.slice(0, stop) : cut).trim()}…`;
 }
 
-/** 并行翻译最多 5 条义项，单条失败只跳过该条 */
+/** 并行翻译最多 4 条义项（短语最多 1 条），单条失败只跳过该条 */
 async function translateSenses(
   rawSenses: RawSense[],
 ): Promise<{ senses: EnrichSense[]; warnings: string[]; okCount: number }> {
@@ -649,9 +688,14 @@ export async function enrichWord(rawWord: string): Promise<EnrichResult> {
       examples = uniqueTerms([...examples, ...wholeLookup.examples], MAX_EXAMPLES);
       phrases = uniqueTerms([...phrases, ...wholeLookup.phrases], MAX_PHRASES);
     }
-    // 中心词义项作为补充；若整条词条自身有义项且中心词查不到，则用整条词条的
-    const headSenses = headwordFound ? headLookup?.senses ?? [] : [];
-    rawSenses = headSenses.length > 0 ? headSenses : base?.senses ?? [];
+    // 中心词义项只作补充：只保留与中心词主要词性一致的 1 条，
+    // 避免把「城堡主塔」（名词）这类与 keep（动词）不一致的义项带进短语结果
+    if (headwordFound) {
+      rawSenses = pickPhraseSenses(headLookup?.senses ?? [], headLookup?.pos ?? null);
+    } else {
+      // 整条短语自身命中的词条没有中心词词性可比对，同样最多留 1 条
+      rawSenses = (base?.senses ?? []).slice(0, 1);
+    }
 
     if (phraseCommon) {
       sources.push("datamuse-phrase");

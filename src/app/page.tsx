@@ -9,6 +9,7 @@ type QueueResp = {
   items: { entryId: string; word: string; reason: string; mode: string }[];
   reviewDay: boolean;
   clozeEnabled: boolean;
+  tomorrowDueCount?: number;
 };
 
 type Me = {
@@ -88,8 +89,15 @@ export default function HomePage() {
 
       <section className="panel no-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
         <div className="flex shrink-0 items-center justify-between gap-3">
-          <h2 className="font-display text-lg">今日队列预览</h2>
-          <Link href="/dictation" className="text-sm text-[var(--teal)]">
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h2 className="font-display text-lg">今日需记忆（艾宾浩斯）</h2>
+            <span className="text-xs text-[var(--muted)]">
+              {queue
+                ? `明日复习 ${queue.tomorrowDueCount ?? 0} 个`
+                : "按 1·2·4·7·15·30·60 天曲线安排"}
+            </span>
+          </div>
+          <Link href="/dictation" className="shrink-0 text-sm text-[var(--teal)]">
             去听写 →
           </Link>
         </div>
@@ -106,7 +114,7 @@ export default function HomePage() {
                 <span className="font-medium">{item.word}</span>
                 <span className="flex gap-2">
                   <span className="badge">
-                    {item.reason === "due" ? "到期" : item.reason === "wrong" ? "错词" : "新词"}
+                    {item.reason === "due" ? "到期复习" : item.reason === "wrong" ? "错词" : "新词"}
                   </span>
                   <span className="badge">
                     {item.mode === "gloss" ? "释义→拼写" : "单词→中文"}

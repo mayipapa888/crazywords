@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type Entry = {
   id: string;
@@ -26,6 +26,115 @@ export default function WordsPage() {
   const pageCount = Math.max(1, Math.ceil(entries.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pageRows = entries.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+
+  /* ---------------- 悬浮朗读 ---------------- */
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const hoverTimerRef = useRef<number | null>(null);
+  const hoverWordRef = useRef<string | null>(null);
+  const speakSeqRef = useRef(0);
+
+  const clearHoverTimer = useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  /** 立刻停掉播放中的音频 / 合成音，并让在途请求作废（seq 自增） */
+  const stopPlayback = useCallback(() => {
+    speakSeqRef.current += 1;
+    clearHoverTimer();
+    const audio = audioRef.current;
+    if (audio) {
+      audio.onended = null;
+      audio.onerror = null;
+      audio.pause();
+      audio.currentTime = 0;
+      audioRef.current = null;
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, [clearHoverTimer]);
+
+  /** 降级路径：浏览器内置语音合成 */
+  const speakWithSynthesis = useCallback((word: string) => {
+    if (typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(word);
+    utterance.lang = "en-US";
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  const speakWord = useCallback(
+    async (word: string) => {
+      const seq = ++speakSeqRef.current;
+      const stale = () => speakSeqRef.current !== seq;
+      try {
+        const res = await fetch("/api/speech/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: word, language: "en-US" }),
+        });
+        if (stale()) return;
+        const data = res.ok
+          ? ((await res.json()) as { audioBase64?: string; mimeType?: string })
+          : null;
+        if (stale()) return;
+        if (data?.audioBase64) {
+          const audio = new Audio(
+            `data:${data.mimeType || "audio/mpeg"};base64,${data.audioBase64}`,
+          );
+          audioRef.current = audio;
+          audio.onended = () => {
+            if (audioRef.current === audio) audioRef.current = null;
+          };
+          audio.onerror = () => {
+            if (audioRef.current === audio) audioRef.current = null;
+            if (!stale()) speakWithSynthesis(word);
+          };
+          try {
+            await audio.play();
+          } catch {
+            if (audioRef.current === audio) audioRef.current = null;
+            if (!stale()) speakWithSynthesis(word);
+          }
+          return;
+        }
+        speakWithSynthesis(word);
+      } catch {
+        if (!stale()) speakWithSynthesis(word);
+      }
+    },
+    [speakWithSynthesis],
+  );
+
+  /** 进入一行 / 单词单元格：同词去重；换词则重排 250ms 防抖 */
+  const handleRowEnter = useCallback(
+    (word: string) => {
+      if (!word || hoverWordRef.current === word) return;
+      hoverWordRef.current = word;
+      clearHoverTimer();
+      hoverTimerRef.current = window.setTimeout(() => {
+        hoverTimerRef.current = null;
+        void speakWord(word);
+      }, 250);
+    },
+    [clearHoverTimer, speakWord],
+  );
+
+  const handleRowLeave = useCallback(() => {
+    hoverWordRef.current = null;
+    stopPlayback();
+  }, [stopPlayback]);
+
+  // 卸载清理：定时器 + 音频 + 合成音，避免幽灵播放
+  useEffect(() => stopPlayback, [stopPlayback]);
+  // 翻页时同样复位，防止上一页的音频继续播
+  useEffect(() => {
+    hoverWordRef.current = null;
+    stopPlayback();
+  }, [safePage, stopPlayback]);
 
   async function load(query = q) {
     const res = await fetch(`/api/entries${query ? `?q=${encodeURIComponent(query)}` : ""}`);
@@ -109,18 +218,30 @@ export default function WordsPage() {
             {pageRows.map((e) => (
               <tr
                 key={e.id}
-                title={e.example ? `例句：${e.example}` : undefined}
                 className="hover:bg-[var(--chip)]/50"
+                onMouseEnter={() => handleRowEnter(e.word)}
+                onMouseLeave={handleRowLeave}
               >
-                <td className="px-3 py-1.5 font-medium">
+                <td
+                  className="px-3 py-1.5 font-medium"
+                  onMouseEnter={() => handleRowEnter(e.word)}
+                >
                   {e.word}
                   {e.pos && <span className="badge ml-2">{e.pos}</span>}
                 </td>
                 <td className="max-w-[16rem] truncate px-3 py-1.5 text-[var(--muted)]">
                   {e.glossZh || "—"}
                 </td>
-                <td className="hidden px-3 py-1.5 text-[var(--muted)] md:table-cell">
-                  {e.ipa || "—"}
+                <td className="group hidden px-3 py-1.5 text-[var(--muted)] md:table-cell">
+                  <span
+                    className={
+                      e.ipa
+                        ? "inline-block origin-left transition duration-150 group-hover:scale-125 group-hover:text-[var(--accent)]"
+                        : "inline-block"
+                    }
+                  >
+                    {e.ipa || "—"}
+                  </span>
                 </td>
                 <td className="px-3 py-1.5">
                   {e.incomplete ? (

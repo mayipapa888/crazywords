@@ -56,24 +56,27 @@ export async function buildTodayQueue(userId: string, goalN: number, clozeEnable
     return mode;
   };
 
-  const due: QueueItem[] = [];
+  // 到期复习：dueAt <= now 的卡片，按 dueAt 升序（逾期最久的先复习）。
+  const dueCandidates: { entry: (typeof dictatable)[number]; dueAt: Date }[] = [];
   for (const entry of dictatable) {
     const card = cardByEntry.get(entry.id);
     if (!card) continue;
     if (card.status === "suspended") continue;
-    if (card.dueAt && card.dueAt <= now && card.status !== "new") {
-      due.push({
-        entryId: entry.id,
-        word: entry.word,
-        glossZh: entry.glossZh,
-        ipa: entry.ipa,
-        pos: entry.pos,
-        example: entry.example,
-        mode: pickMode(),
-        reason: "due",
-      });
-    }
+    if (!card.dueAt || card.status === "new") continue;
+    if (card.dueAt.getTime() > now.getTime()) continue;
+    dueCandidates.push({ entry, dueAt: card.dueAt });
   }
+  dueCandidates.sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime());
+  const due: QueueItem[] = dueCandidates.map(({ entry }) => ({
+    entryId: entry.id,
+    word: entry.word,
+    glossZh: entry.glossZh,
+    ipa: entry.ipa,
+    pos: entry.pos,
+    example: entry.example,
+    mode: pickMode(),
+    reason: "due",
+  }));
 
   const selected: QueueItem[] = [];
   const used = new Set<string>();
@@ -130,5 +133,18 @@ export async function buildTodayQueue(userId: string, goalN: number, clozeEnable
     }
   }
 
-  return { date, goalN, items: selected, reviewDay };
+  // 明日复习量：dueAt 落在明天本地日期区间内的卡片数，仅用于首页提示。
+  const tomorrowStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const dayAfterStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 2);
+  let tomorrowDueCount = 0;
+  for (const card of cards) {
+    if (!card.dueAt || card.status === "new" || card.status === "suspended") continue;
+    if (!byId.has(card.entryId)) continue;
+    const dueTime = card.dueAt.getTime();
+    if (dueTime >= tomorrowStart.getTime() && dueTime < dayAfterStart.getTime()) {
+      tomorrowDueCount += 1;
+    }
+  }
+
+  return { date, goalN, items: selected, reviewDay, tomorrowDueCount };
 }
