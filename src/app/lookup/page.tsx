@@ -65,6 +65,51 @@ function micErrorMessage(err: unknown): string {
   return "无法开始实时识别，仍可手动输入查词。";
 }
 
+function playUtterance(text: string, lang: string): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      if (typeof window === "undefined" || !window.speechSynthesis) {
+        resolve();
+        return;
+      }
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang;
+      u.onend = () => resolve();
+      u.onerror = () => resolve();
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch {
+      // 浏览器语音也不可用：静默降级
+      resolve();
+    }
+  });
+}
+
+/** 播放 TTS 返回的 base64 音频；holder 用于页面卸载 / 重播时打断当前音频 */
+function playAudioBase64(
+  audioBase64: string,
+  mimeType?: string,
+  holder?: { current: HTMLAudioElement | null },
+): Promise<void> {
+  return new Promise((resolve) => {
+    const src = `data:${mimeType || "audio/mpeg"};base64,${audioBase64}`;
+    const audio = new Audio(src);
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      if (holder && holder.current === audio) holder.current = null;
+      resolve();
+    };
+    if (holder) holder.current = audio;
+    audio.onended = done;
+    audio.onerror = done;
+    // 主动 pause 时也应结束等待，避免 await 悬挂
+    audio.onpause = done;
+    void audio.play().then(undefined, done);
+  });
+}
+
 export default function LookupPage() {
   const [text, setText] = useState("");
   const [recording, setRecording] = useState(false);
@@ -80,17 +125,99 @@ export default function LookupPage() {
   const [savingGloss, setSavingGloss] = useState(false);
   const [glossError, setGlossError] = useState<string | null>(null);
   const [glossMsg, setGlossMsg] = useState<string | null>(null);
+  const [speaking, setSpeaking] = useState(false);
   const asrRef = useRef<RealtimeAsrSession | null>(null);
   const textRef = useRef("");
   // 当前展示的单词：异步保存返回时用它判断用户是否已经查了别的词
   const currentWordRef = useRef<string | null>(null);
   currentWordRef.current = result?.entry?.word ?? null;
+  // 自动朗读去重：记录最近一次朗读过的词（小写），只有词变化时才自动读
+  const spokenWordRef = useRef<string | null>(null);
+  /** 朗读代际：重播 / 卸载时自增，旧播报自行失效 */
+  const speakGen = useRef(0);
+  const wordAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopWordSpeech = useCallback(() => {
+    speakGen.current += 1;
+    const audio = wordAudioRef.current;
+    wordAudioRef.current = null;
+    if (audio) {
+      try {
+        audio.pause();
+        audio.src = "";
+      } catch {
+        // 浏览器限制时忽略
+      }
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
+
+  /** 英文朗读单词一遍：优先阿里云音频，失败退浏览器语音，再失败静默 */
+  const speakWord = useCallback(
+    async (rawWord: string) => {
+      const word = rawWord.trim();
+      if (!word) return;
+      stopWordSpeech();
+      // 手动重播也算「已朗读过这个词」，避免自动朗读的定时器随后再重复触发
+      spokenWordRef.current = word.toLowerCase();
+      const gen = speakGen.current;
+      setSpeaking(true);
+      try {
+        const res = await fetch("/api/speech/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: word, language: "en-US" }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          audioBase64?: string;
+          mimeType?: string;
+        };
+        if (speakGen.current !== gen) return;
+        if (res.ok && data.audioBase64) {
+          await playAudioBase64(data.audioBase64, data.mimeType, wordAudioRef);
+          return;
+        }
+        await playUtterance(word, "en-US");
+      } catch {
+        if (speakGen.current === gen) {
+          await playUtterance(word, "en-US");
+        }
+      } finally {
+        if (speakGen.current === gen) setSpeaking(false);
+      }
+    },
+    [stopWordSpeech],
+  );
 
   useEffect(() => {
     return () => {
       void asrRef.current?.stop().catch(() => undefined);
+      stopWordSpeech();
     };
-  }, []);
+  }, [stopWordSpeech]);
+
+  // 查询成功且拿到 entry.word 后自动朗读一次；同一词（改释义等状态更新）不会重复触发
+  const speakableWord = result?.found ? (result.entry?.word ?? null) : null;
+  useEffect(() => {
+    const word = (speakableWord || "").trim();
+    if (!word) return;
+    const key = word.toLowerCase();
+    if (spokenWordRef.current === key) return;
+    // 延后一拍再标记 / 朗读：StrictMode 的「挂载→卸载→挂载」会清掉第一个定时器，
+    // 最终只真正朗读一次，也不会被模拟卸载打断。
+    const timer = setTimeout(() => {
+      if (spokenWordRef.current === key) return;
+      spokenWordRef.current = key;
+      void speakWord(word);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      // 换词 / 卸载：停掉本条词的播报
+      stopWordSpeech();
+    };
+  }, [speakableWord, speakWord, stopWordSpeech]);
 
   const runLookup = useCallback(async (query: string) => {
     const q = query.trim();
@@ -470,12 +597,22 @@ export default function LookupPage() {
             <p className="font-display text-lg">{result.message || "未找到"}</p>
           ) : (
             <>
-              <p className="font-display text-xl">
-                {result.entry.word}
-                {result.entry.pos && (
-                  <span className="text-xs text-[var(--muted)] ml-2">{result.entry.pos}</span>
-                )}
-              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="font-display min-w-0 break-words text-xl">
+                  {result.entry.word}
+                  {result.entry.pos && (
+                    <span className="ml-2 text-xs text-[var(--muted)]">{result.entry.pos}</span>
+                  )}
+                </p>
+                <button
+                  type="button"
+                  className="badge shrink-0 cursor-pointer text-[var(--teal)] hover:bg-[var(--teal-soft)]"
+                  aria-label="朗读单词"
+                  onClick={() => void speakWord(result.entry?.word ?? "")}
+                >
+                  🔊 {speaking ? "朗读中…" : "朗读"}
+                </button>
+              </div>
               {result.entry.ipa && <p className="text-xs text-[var(--muted)]">{result.entry.ipa}</p>}
               {editingGloss ? (
                 <div className="space-y-1">

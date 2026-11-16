@@ -58,26 +58,44 @@ type Phase = "idle" | "tts" | "wait-record" | "recording" | "feedback";
 
 function playUtterance(text: string, lang: string): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof window === "undefined" || !window.speechSynthesis) {
+    try {
+      if (typeof window === "undefined" || !window.speechSynthesis) {
+        resolve();
+        return;
+      }
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = lang;
+      u.onend = () => resolve();
+      u.onerror = () => resolve();
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(u);
+    } catch {
+      // 浏览器语音也不可用：静默降级
       resolve();
-      return;
     }
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = lang;
-    u.onend = () => resolve();
-    u.onerror = () => resolve();
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(u);
   });
 }
 
-function playAudioBase64(audioBase64: string, mimeType?: string): Promise<void> {
+function playAudioBase64(
+  audioBase64: string,
+  mimeType?: string,
+  holder?: { current: HTMLAudioElement | null },
+): Promise<void> {
   return new Promise((resolve) => {
     const src = `data:${mimeType || "audio/mpeg"};base64,${audioBase64}`;
     const audio = new Audio(src);
-    const done = () => resolve();
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      if (holder && holder.current === audio) holder.current = null;
+      resolve();
+    };
+    if (holder) holder.current = audio;
     audio.onended = done;
     audio.onerror = done;
+    // 被 stopAnswerSpeech() 主动暂停时也要结束等待，避免 await 悬挂
+    audio.onpause = done;
     void audio.play().then(undefined, done);
   });
 }
@@ -164,6 +182,9 @@ export default function DictationPage() {
   const tickTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   /** 开录后 N 秒内没有任何识别文本 → 自动停录并进入判定 */
   const noTextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 正解播报代际：点「重试本词 / 下一个」时自增，立即终止旧播报 */
+  const answerGen = useRef(0);
+  const answerAudioRef = useRef<HTMLAudioElement | null>(null);
   const timersRef = useRef(timers);
   timersRef.current = timers;
 
@@ -229,53 +250,75 @@ export default function DictationPage() {
     }
   }, []);
 
+  /** 立即终止正在进行的正解播报（音频 / 浏览器语音），并让旧循环自行退出 */
+  const stopAnswerSpeech = useCallback(() => {
+    answerGen.current += 1;
+    const audio = answerAudioRef.current;
+    answerAudioRef.current = null;
+    if (audio) {
+      try {
+        audio.pause();
+        audio.src = "";
+      } catch {
+        // 浏览器不允许操作时忽略
+      }
+    }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+  }, []);
+
   /**
-   * 答错后的正解播报：单词连读 3 遍（间隔 0.7s），随后依次朗读
-   * 例句、词组、相近词（近/反义）。任一段为空则跳过。
+   * 答错后的正解播报：只读中文释义 ×3 → 英文例句 ×3，
+   * 空内容跳过；每遍之间间隔 700ms，且逐遍 await 保证不重叠。
+   * 单词 / 词组 / 相近词不再朗读。
    */
   const speakAnswer = useCallback(async (answer: Feedback["answer"]) => {
-    const hasChinese = (text: string) => /[\u4e00-\u9fff]/.test(text);
+    const gen = answerGen.current + 1;
+    answerGen.current = gen;
+    const cancelled = () => answerGen.current !== gen;
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
     const speakOnce = async (text: string, language: string) => {
       const value = (text || "").trim();
-      if (!value) return;
+      if (!value || cancelled()) return;
       try {
         const res = await fetch("/api/speech/tts", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: value, language }),
         });
-        const data = await res.json();
+        const data = (await res.json().catch(() => ({}))) as {
+          audioBase64?: string;
+          mimeType?: string;
+        };
+        if (cancelled()) return;
         if (res.ok && data.audioBase64) {
-          await playAudioBase64(data.audioBase64, data.mimeType);
+          await playAudioBase64(data.audioBase64, data.mimeType, answerAudioRef);
           return;
         }
         await playUtterance(value, language);
       } catch {
-        await playUtterance(value, language);
+        if (!cancelled()) await playUtterance(value, language);
       }
     };
 
-    for (let i = 0; i < 3; i += 1) {
-      await speakOnce(answer.word, "en-US");
-      if (i < 2) await new Promise((resolve) => setTimeout(resolve, 700));
+    const gloss = (answer.glossZh || "").trim();
+    const example = (answer.example || "").trim();
+    const passes: { text: string; language: string }[] = [];
+    for (let i = 0; i < 3 && gloss; i += 1) {
+      passes.push({ text: gloss, language: "zh-CN" });
+    }
+    for (let i = 0; i < 3 && example; i += 1) {
+      passes.push({ text: example, language: "en-US" });
     }
 
-    if (answer.example) {
-      await speakOnce(answer.example, "en-US");
-    }
-
-    if (answer.phrases && answer.phrases.length > 0) {
-      const phraseText = answer.phrases.join(", ");
-      await speakOnce(phraseText, hasChinese(phraseText) ? "zh-CN" : "en-US");
-    }
-
-    if (answer.related && answer.related.length > 0) {
-      const relatedText = answer.related
-        .map((item) => item.replace(/^(近|反)\s*[:：]\s*/, ""))
-        .join(", ");
-      if (relatedText.trim()) {
-        await speakOnce(relatedText, hasChinese(relatedText) ? "zh-CN" : "en-US");
+    for (let i = 0; i < passes.length; i += 1) {
+      if (cancelled()) return;
+      await speakOnce(passes[i].text, passes[i].language);
+      if (i < passes.length - 1) {
+        if (cancelled()) return;
+        await sleep(700);
       }
     }
   }, []);
@@ -352,7 +395,9 @@ export default function DictationPage() {
       const next = prev + 1;
       if (next >= items.length) {
         if (sessionId) {
-          void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" });
+          void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" }).catch(
+            () => undefined,
+          );
         }
       }
       return next;
@@ -449,7 +494,7 @@ export default function DictationPage() {
           return;
         }
 
-        // 错误：惋惜音 + 红叉 + 正解朗读 3 遍，仅可重试当前词
+        // 错误：惋惜音 + 红叉 + 正解播报（释义×3 · 例句×3），可重试本词或直接下一个
         playFailChime();
         setFeedback(data);
         setPhase("feedback");
@@ -668,8 +713,9 @@ export default function DictationPage() {
     return () => {
       clearTimers();
       void stopAsr();
+      stopAnswerSpeech();
     };
-  }, [clearTimers, stopAsr]);
+  }, [clearTimers, stopAsr, stopAnswerSpeech]);
 
   if (!micOk) {
     return (
@@ -686,7 +732,7 @@ export default function DictationPage() {
         <h1 className="font-display text-xl">听写</h1>
         <div className="panel space-y-3 p-4">
           <p className="text-sm text-[var(--muted)]">
-            请选择本轮模式。答对叮咚后进入下一词；答错红叉仅可重试本词，并自动朗读正解 3 遍。
+            请选择本轮模式。答对叮咚后进入下一词；答错红叉可「重试本词」或「下一个」，并自动朗读正解（释义×3 · 例句×3）。
           </p>
 
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -909,13 +955,32 @@ export default function DictationPage() {
                 )}
               </div>
               <AnswerCard answer={feedback.answer} />
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-[var(--muted)]">
-                  正解播报：单词×3 · 例句 · 词组 · 相近词
+                  正解播报：释义×3 · 例句×3
                 </p>
-                <button type="button" className="btn-primary" onClick={retryCurrent}>
-                  重试本词
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn-secondary px-3 py-1 text-xs"
+                    onClick={() => {
+                      stopAnswerSpeech();
+                      nextWord();
+                    }}
+                  >
+                    下一个
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-primary px-3 py-1 text-xs"
+                    onClick={() => {
+                      stopAnswerSpeech();
+                      retryCurrent();
+                    }}
+                  >
+                    重试本词
+                  </button>
+                </div>
               </div>
             </div>
           )}
