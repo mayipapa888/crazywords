@@ -78,6 +78,11 @@ export default function NotesPage() {
   const reviewIndexSafe = Math.min(reviewIndex, Math.max(0, visibleNotes.length - 1));
   const reviewNote = visibleNotes[reviewIndexSafe] ?? null;
 
+  const backToList = useCallback(() => {
+    setView("list");
+    setError(null);
+  }, []);
+
   useEffect(() => {
     if (view !== "review") return;
 
@@ -92,12 +97,15 @@ export default function NotesPage() {
         setReviewIndex((current) =>
           Math.min(Math.max(0, visibleNotes.length - 1), current + 1),
         );
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        backToList();
       }
     }
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [view, visibleNotes.length]);
+  }, [view, visibleNotes.length, backToList]);
 
   const message = error ? (
     <p className="shrink-0 text-xs text-[var(--danger)]">{error}</p>
@@ -130,9 +138,12 @@ export default function NotesPage() {
     setView("review");
   }
 
-  function backToList() {
-    setView("list");
+  function openCard(note: Note) {
+    const index = visibleNotes.findIndex((item) => item.id === note.id);
+    setReviewIndex(index >= 0 ? index : 0);
     setError(null);
+    setNotice(null);
+    setView("review");
   }
 
   async function save() {
@@ -222,61 +233,107 @@ export default function NotesPage() {
           {message}
 
           <div className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
-            <ul className="no-scrollbar min-h-0 flex-1 divide-y divide-[var(--line)] overflow-y-auto">
-              {visibleNotes.map((note) => (
-                <li key={note.id} className="flex items-start justify-between gap-3 px-3 py-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">{note.title}</p>
-                    <p className="line-clamp-2 whitespace-pre-line break-words text-xs leading-snug text-[var(--muted)]">
-                      {note.content || "（无内容）"}
-                    </p>
-                    <p className="mt-0.5 text-xs text-[var(--muted)]">
-                      更新于 {formatUpdatedAt(note.updatedAt)}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2 text-xs">
-                    <button
-                      type="button"
-                      className="text-[var(--teal)] hover:underline"
-                      onClick={() => startEdit(note)}
-                    >
-                      编辑
-                    </button>
-                    <button
-                      type="button"
-                      className="text-[var(--danger)] hover:underline"
-                      onClick={() => void remove(note)}
-                    >
-                      删除
-                    </button>
-                  </div>
-                </li>
-              ))}
-
-              {loading && notes.length === 0 && (
-                <li className="px-3 py-10 text-center text-xs text-[var(--muted)]">加载中…</li>
-              )}
-              {!loading && visibleNotes.length === 0 && (
-                <li className="px-3 py-10 text-center text-xs text-[var(--muted)]">
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto p-3">
+              {visibleNotes.length > 0 ? (
+                <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {visibleNotes.map((note) => (
+                    <li key={note.id} className="relative h-44">
+                      <article className="panel flex h-full flex-col p-3 transition-shadow hover:shadow-md">
+                        <button
+                          type="button"
+                          className="absolute inset-0 z-0 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--teal)]"
+                          aria-label={`查看知识点「${note.title}」`}
+                          onClick={() => openCard(note)}
+                        />
+                        <div className="pointer-events-none relative z-10 flex min-h-0 flex-1 flex-col">
+                          <h2 className="truncate text-sm font-bold">{note.title}</h2>
+                          <p className="mt-1 line-clamp-3 shrink-0 whitespace-pre-line break-words text-xs leading-snug text-[var(--muted)]">
+                            {note.content || "（无内容）"}
+                          </p>
+                          <div className="pointer-events-auto mt-auto flex shrink-0 items-center justify-between gap-2 pt-2 text-xs">
+                            <span className="truncate text-[var(--muted)]">
+                              更新于 {formatUpdatedAt(note.updatedAt)}
+                            </span>
+                            <span className="flex shrink-0 items-center gap-2">
+                              <button
+                                type="button"
+                                className="text-[var(--teal)] hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  startEdit(note);
+                                }}
+                              >
+                                编辑
+                              </button>
+                              <button
+                                type="button"
+                                className="text-[var(--danger)] hover:underline"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  void remove(note);
+                                }}
+                              >
+                                删除
+                              </button>
+                            </span>
+                          </div>
+                        </div>
+                      </article>
+                    </li>
+                  ))}
+                </ul>
+              ) : loading && notes.length === 0 ? (
+                <div className="flex h-full items-center justify-center p-6 text-xs text-[var(--muted)]">
+                  加载中…
+                </div>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
                   {error ? (
                     <>
-                      加载失败，
+                      <p className="text-sm text-[var(--danger)]">加载失败</p>
+                      <p className="text-xs text-[var(--muted)]">
+                        请检查网络后重试，或稍后再试。
+                      </p>
                       <button
                         type="button"
-                        className="underline"
+                        className="btn-primary py-1.5 text-xs"
                         onClick={() => void loadNotes()}
                       >
                         重试
                       </button>
                     </>
                   ) : notes.length === 0 ? (
-                    "还没有知识点，点「+ 新建」记录词语辨析或语法笔记"
+                    <>
+                      <p className="text-sm">还没有知识点</p>
+                      <p className="text-xs text-[var(--muted)]">
+                        记录词语辨析、语法笔记或易混点对比，点击卡片可查看完整内容。
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-primary py-1.5 text-xs"
+                        onClick={startCreate}
+                      >
+                        + 新建
+                      </button>
+                    </>
                   ) : (
-                    "没有匹配的笔记"
+                    <>
+                      <p className="text-sm">没有匹配的笔记</p>
+                      <p className="text-xs text-[var(--muted)]">
+                        换个关键词试试，或清空搜索查看全部卡片。
+                      </p>
+                      <button
+                        type="button"
+                        className="btn-secondary py-1.5 text-xs"
+                        onClick={() => setQuery("")}
+                      >
+                        清空搜索
+                      </button>
+                    </>
                   )}
-                </li>
+                </div>
               )}
-            </ul>
+            </div>
           </div>
         </>
       )}
@@ -354,13 +411,13 @@ export default function NotesPage() {
         <>
           <header className="flex shrink-0 flex-wrap items-center justify-between gap-2">
             <div>
-              <h1 className="font-display text-xl">复习知识点</h1>
+              <h1 className="font-display text-xl">知识点卡片</h1>
               <p className="text-xs text-[var(--muted)]">
-                一次一条 · 键盘 ← → 翻页 · 共 {visibleNotes.length} 条
+                一次一条 · 键盘 ← → 翻页 · Esc 返回卡片网格 · 共 {visibleNotes.length} 条
               </p>
             </div>
             <button type="button" className="btn-secondary py-1.5 text-xs" onClick={backToList}>
-              返回列表
+              返回卡片
             </button>
           </header>
 
@@ -368,29 +425,45 @@ export default function NotesPage() {
 
           <div className="panel mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-hidden">
             {reviewNote ? (
-              <div className="flex min-h-0 flex-1 flex-col gap-2 p-4">
-                <h2 className="shrink-0 text-base font-medium">{reviewNote.title}</h2>
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex shrink-0 items-start justify-between gap-2 border-b border-[var(--line)] px-4 py-3">
+                  <h2 className="min-w-0 break-words text-base font-bold">{reviewNote.title}</h2>
+                  <button
+                    type="button"
+                    className="shrink-0 text-xs text-[var(--teal)] hover:underline"
+                    onClick={() => startEdit(reviewNote)}
+                  >
+                    编辑
+                  </button>
+                </div>
                 <div
                   key={reviewNote.id}
-                  className="no-scrollbar min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed"
+                  className="no-scrollbar min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words px-4 py-3 text-sm leading-relaxed"
                 >
-                  {reviewNote.content}
+                  {reviewNote.content || "（无内容）"}
                 </div>
               </div>
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 p-6 text-center">
                 <p className="text-sm text-[var(--muted)]">
                   {notes.length === 0
-                    ? "还没有可复习的笔记，先去新建一条吧"
+                    ? "还没有可查看的知识点，先去新建一条吧"
                     : "当前搜索没有匹配的笔记"}
                 </p>
-                <button
-                  type="button"
-                  className="btn-primary py-1.5 text-xs"
-                  onClick={notes.length === 0 ? startCreate : backToList}
-                >
-                  {notes.length === 0 ? "去新建" : "返回列表"}
-                </button>
+                <div className="flex gap-2">
+                  {notes.length === 0 && (
+                    <button
+                      type="button"
+                      className="btn-primary py-1.5 text-xs"
+                      onClick={startCreate}
+                    >
+                      去新建
+                    </button>
+                  )}
+                  <button type="button" className="btn-secondary py-1.5 text-xs" onClick={backToList}>
+                    返回卡片
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -402,10 +475,10 @@ export default function NotesPage() {
               disabled={!reviewNote || reviewIndexSafe <= 0}
               onClick={() => setReviewIndex(Math.max(0, reviewIndexSafe - 1))}
             >
-              上一页
+              ← 上一条
             </button>
             <p className="text-xs text-[var(--muted)]">
-              第 {reviewNote ? reviewIndexSafe + 1 : 0} / {visibleNotes.length} 页
+              第 {reviewNote ? reviewIndexSafe + 1 : 0} / {visibleNotes.length} 条
             </p>
             <button
               type="button"
@@ -413,7 +486,7 @@ export default function NotesPage() {
               disabled={!reviewNote || reviewIndexSafe >= visibleNotes.length - 1}
               onClick={() => setReviewIndex(Math.min(visibleNotes.length - 1, reviewIndexSafe + 1))}
             >
-              下一页
+              下一条 →
             </button>
           </footer>
         </>
