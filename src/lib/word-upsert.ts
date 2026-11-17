@@ -26,14 +26,26 @@ export async function upsertEntriesForUser(opts: {
   let updated = 0;
   let lastEntryId: string | null = null;
 
-  for (const row of opts.entries) {
-    const existing = await prisma.wordEntry.findUnique({
-      where: { listId_word: { listId: list.id, word: row.word } },
-    });
+  // 跨词表去重：同一个词在用户任意词表里已存在时复用该词条，
+  // 避免「导入词表 + 查词收藏」各存一条形成重复。
+  const allEntries = await prisma.wordEntry.findMany({
+    where: { list: { userId: opts.userId } },
+    select: { id: true, word: true, listId: true },
+  });
+  const byWord = new Map<string, string>();
+  for (const entry of allEntries) {
+    const key = entry.word.trim().toLowerCase();
+    // 目标词表内的词条优先，其次保留最先遇到的一条
+    if (!byWord.has(key) || entry.listId === list.id) byWord.set(key, entry.id);
+  }
 
-    if (existing) {
+  for (const row of opts.entries) {
+    const key = row.word.trim().toLowerCase();
+    const hitId = byWord.get(key);
+
+    if (hitId) {
       await prisma.wordEntry.update({
-        where: { id: existing.id },
+        where: { id: hitId },
         data: {
           glossZh: row.glossZh,
           ipa: row.ipa,
@@ -43,7 +55,7 @@ export async function upsertEntriesForUser(opts: {
           related: row.related,
         },
       });
-      lastEntryId = existing.id;
+      lastEntryId = hitId;
       updated += 1;
     } else {
       const entry = await prisma.wordEntry.create({
@@ -52,6 +64,7 @@ export async function upsertEntriesForUser(opts: {
       await prisma.cardState.create({
         data: { userId: opts.userId, entryId: entry.id, status: "new" },
       });
+      byWord.set(key, entry.id);
       lastEntryId = entry.id;
       created += 1;
     }
