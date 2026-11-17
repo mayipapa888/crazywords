@@ -10,6 +10,7 @@ const NAV = [
   { href: "/dictation", label: "听写" },
   { href: "/lookup", label: "查词" },
   { href: "/wrong-book", label: "错词本" },
+  { href: "/notes", label: "知识点" },
   { href: "/wordbook", label: "我的单词本" },
   { href: "/calendar", label: "打卡" },
   { href: "/settings", label: "设置" },
