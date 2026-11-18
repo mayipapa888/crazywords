@@ -4,14 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const NAV = [
-  { href: "/", label: "今日" },
-  { href: "/words", label: "词库" },
-  { href: "/import", label: "导入" },
-  { href: "/dictation", label: "听写" },
+  { href: "/", label: "首页" },
   { href: "/lookup", label: "查词" },
-  { href: "/wrong-book", label: "错词本" },
+  { href: "/dictation", label: "听写" },
+  { href: "/wrong-book", label: "错题本" },
+  { href: "/wordbook", label: "单词本" },
   { href: "/notes", label: "知识点" },
-  { href: "/wordbook", label: "我的单词本" },
+  { href: "/words", label: "词库维护" },
   { href: "/calendar", label: "打卡" },
   { href: "/settings", label: "设置" },
 ];
