@@ -1,10 +1,19 @@
 import { getNlsToken } from "./aliyun-token";
 import { toAliyunAsrWav } from "./audio-convert";
-import { nlsRegion, requireSpeechKeys } from "./config";
+import { getAsrTimeoutMs, getTtsSettings, nlsRegion, requireSpeechKeys } from "./config";
 import type { AsrProvider, AsrResult, TtsProvider, TtsResult } from "./types";
 
 function gatewayBase(): string {
   return `https://nls-gateway-${nlsRegion()}.aliyuncs.com`;
+}
+
+/** 把 fetch 的超时/网络错误转成可读错误，避免把 DOMException 原样抛给前端。 */
+function describeFetchError(kind: "TTS" | "ASR", e: unknown, timeoutMs: number): string {
+  const err = e as { name?: string; message?: string } | null;
+  if (err?.name === "TimeoutError" || err?.name === "AbortError") {
+    return `阿里云 ${kind} 请求超时（>${timeoutMs}ms）`;
+  }
+  return `阿里云 ${kind} 请求失败：${err?.message || String(e)}`;
 }
 
 /** 一句话识别 RESTful（适合听写短录音） */
@@ -33,15 +42,22 @@ export class AliyunAsrProvider implements AsrProvider {
     url.searchParams.set("enable_punctuation_prediction", "false");
     url.searchParams.set("enable_inverse_text_normalization", "true");
 
-    const res = await fetch(url.toString(), {
-      method: "POST",
-      headers: {
-        "X-NLS-Token": token,
-        "Content-Type": "application/octet-stream",
-        "Content-Length": String(wav.length),
-      },
-      body: new Uint8Array(wav),
-    });
+    const timeoutMs = getAsrTimeoutMs();
+    let res: Response;
+    try {
+      res = await fetch(url.toString(), {
+        method: "POST",
+        headers: {
+          "X-NLS-Token": token,
+          "Content-Type": "application/octet-stream",
+          "Content-Length": String(wav.length),
+        },
+        body: new Uint8Array(wav),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch (e) {
+      throw new Error(describeFetchError("ASR", e, timeoutMs));
+    }
 
     const textBody = await res.text();
     let json: { status?: number; result?: string; message?: string; task_id?: string };
@@ -84,29 +100,38 @@ export class AliyunTtsProvider implements TtsProvider {
       region: nlsRegion(),
     });
 
-    const isEn = Boolean(opts?.language?.toLowerCase().startsWith("en"));
-    const voice =
-      (isEn
-        ? process.env.TTS_VOICE_EN?.trim() || process.env.TTS_VOICE?.trim()
-        : process.env.TTS_VOICE?.trim()) || (isEn ? "betty" : "xiaoyun");
-    const format = (process.env.TTS_FORMAT || "mp3").toLowerCase();
-    const sampleRate = Number(process.env.TTS_SAMPLE_RATE || 16000);
+    const settings = getTtsSettings(opts?.language);
+    const { voice, format, sampleRate, speechRate, pitchRate, volume } = settings;
 
-    const res = await fetch(`${gatewayBase()}/stream/v1/tts`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        appkey: keys.appKey,
-        token,
-        text: clipped,
-        format,
-        sample_rate: sampleRate,
-        voice,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${gatewayBase()}/stream/v1/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          appkey: keys.appKey,
+          token,
+          text: clipped,
+          format,
+          sample_rate: sampleRate,
+          voice,
+          speech_rate: speechRate,
+          pitch_rate: pitchRate,
+          volume,
+        }),
+        signal: AbortSignal.timeout(settings.timeoutMs),
+      });
+    } catch (e) {
+      throw new Error(describeFetchError("TTS", e, settings.timeoutMs));
+    }
 
     const contentType = res.headers.get("content-type") || "";
-    const buf = Buffer.from(await res.arrayBuffer());
+    let buf: Buffer;
+    try {
+      buf = Buffer.from(await res.arrayBuffer());
+    } catch (e) {
+      throw new Error(describeFetchError("TTS", e, settings.timeoutMs));
+    }
 
     if (contentType.includes("application/json") || buf[0] === 0x7b /* { */) {
       let message = buf.toString("utf8");

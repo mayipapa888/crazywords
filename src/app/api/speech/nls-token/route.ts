@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { errorJson, jsonWithSession, requireUser } from "@/lib/auth";
 import { getNlsToken } from "@/lib/speech/aliyun-token";
 import {
+  getAsrSessionSettings,
   getSpeechProviderName,
   nlsRegion,
   nlsWsUrl,
@@ -59,7 +60,9 @@ export async function POST(req: Request) {
         appkey: keys.appKey,
         wsUrl,
         region,
-        note: "浏览器将连接 SpeechTranscriber WebSocket。请确保项目已开通「实时语音识别」；模式 A 英文模型、模式 B 中文能力。",
+        // 采样率/热词/断句参数由服务端 env 统一配置，浏览器只负责按此采集与重采样
+        asr: getAsrSessionSettings(),
+        note: "浏览器将连接 SpeechTranscriber WebSocket。请确保项目已开通「实时语音识别」；英文需在 NLS 控制台项目里选择英文模型（协议不支持 model 参数）。",
       },
       auth,
     );

@@ -35,6 +35,113 @@ export function nlsWsUrl(): string {
   );
 }
 
+/** 读取整数型 env：缺失/非法回退默认值，并夹到 [min, max]。 */
+function envInt(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) return fallback;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+/** 读取布尔型 env：1/true/yes/on 与 0/false/no/off，其余回退默认值。 */
+function envBool(name: string, fallback: boolean): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw) return fallback;
+  if (["1", "true", "yes", "on"].includes(raw)) return true;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return fallback;
+}
+
+function envString(name: string): string | undefined {
+  const raw = process.env[name]?.trim();
+  return raw || undefined;
+}
+
+export type TtsFormat = "mp3" | "wav" | "pcm";
+
+export type TtsSettings = {
+  voice: string;
+  format: TtsFormat;
+  sampleRate: number;
+  /** -500~500；官方公式：小于 1 倍速时 rate = (1 - 1/倍数) / 0.002 */
+  speechRate: number;
+  pitchRate: number;
+  volume: number;
+  timeoutMs: number;
+};
+
+const TTS_FORMATS: TtsFormat[] = ["mp3", "wav", "pcm"];
+const TTS_SAMPLE_RATES = [8000, 16000, 24000, 48000];
+
+/**
+ * 语音合成参数，全部可用 env 覆盖且带安全默认：
+ * - 英文默认 ava（美式英文女声，8K/16K），中文默认 xiaoyun；
+ * - 英文默认语速 -100（约 0.83 倍速，拼写朗读更清晰），中文 0（原速）；
+ * - 采样率默认 16000：短文本 TTS 的 ava/betty 仅支持 8K/16K，24K 需发音人支持。
+ */
+export function getTtsSettings(language?: string): TtsSettings {
+  const isEn = (language || "zh-CN").trim().toLowerCase().startsWith("en");
+  const voice = isEn
+    ? envString("TTS_VOICE_EN") || envString("TTS_VOICE") || "ava"
+    : envString("TTS_VOICE") || "xiaoyun";
+
+  const rawFormat = (process.env.TTS_FORMAT || "mp3").trim().toLowerCase();
+  const format = TTS_FORMATS.includes(rawFormat as TtsFormat)
+    ? (rawFormat as TtsFormat)
+    : "mp3";
+
+  const rawSampleRate = envInt("TTS_SAMPLE_RATE", 16000, 8000, 48000);
+  const sampleRate = TTS_SAMPLE_RATES.includes(rawSampleRate) ? rawSampleRate : 16000;
+
+  return {
+    voice,
+    format,
+    sampleRate,
+    speechRate: envInt(
+      isEn ? "TTS_SPEECH_RATE_EN" : "TTS_SPEECH_RATE_ZH",
+      isEn ? -100 : 0,
+      -500,
+      500,
+    ),
+    pitchRate: envInt("TTS_PITCH_RATE", 0, -500, 500),
+    volume: envInt("TTS_VOLUME", 50, 0, 100),
+    timeoutMs: envInt("TTS_TIMEOUT_MS", 15000, 1000, 60000),
+  };
+}
+
+export type AsrSessionSettings = {
+  format: "pcm";
+  sampleRate: 8000 | 16000;
+  enableIntermediateResult: boolean;
+  enablePunctuationPrediction: boolean;
+  maxSentenceSilence: number;
+  vocabularyId?: string;
+  customizationId?: string;
+};
+
+/**
+ * 实时识别 StartTranscription 参数。NLS 只支持 8k/16k PCM 16bit 单声道；
+ * 语种模型在 NLS 控制台项目里选择，协议本身没有 model 参数。
+ */
+export function getAsrSessionSettings(): AsrSessionSettings {
+  const rate = envInt("NLS_ASR_SAMPLE_RATE", 16000, 8000, 16000);
+  return {
+    format: "pcm",
+    sampleRate: rate === 8000 ? 8000 : 16000,
+    enableIntermediateResult: envBool("NLS_ASR_INTERMEDIATE_RESULT", true),
+    enablePunctuationPrediction: envBool("NLS_ASR_PUNCTUATION", false),
+    maxSentenceSilence: envInt("NLS_ASR_MAX_SENTENCE_SILENCE", 800, 200, 2000),
+    vocabularyId: envString("NLS_ASR_VOCABULARY_ID"),
+    customizationId: envString("NLS_ASR_CUSTOMIZATION_ID"),
+  };
+}
+
+/** 一句话识别 REST 的超时（ms）。 */
+export function getAsrTimeoutMs(): number {
+  return envInt("ASR_TIMEOUT_MS", 30000, 1000, 120000);
+}
+
 function readKeyTriple(prefix: "ASR" | "TTS"): SpeechKeys | null {
   const accessKeyId = process.env[`${prefix}_ACCESS_KEY_ID`]?.trim();
   const accessKeySecret = process.env[`${prefix}_ACCESS_KEY_SECRET`]?.trim();

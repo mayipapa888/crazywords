@@ -27,7 +27,8 @@ export async function POST(req: Request) {
 
     const tts = getTtsProvider();
     const result = await tts.synthesize(text, {
-      language: body.language || "zh-CN",
+      // 强制转字符串：调用方传 "en-US"/"zh-CN"，异常类型也不能让 startsWith 抛错
+      language: String(body.language || "zh-CN"),
     });
 
     if (providerName === "aliyun") {

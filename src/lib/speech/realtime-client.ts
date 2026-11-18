@@ -43,17 +43,71 @@ function floatTo16BitPCM(input: Float32Array): ArrayBuffer {
   return buf;
 }
 
-/** 将任意采样率音频降/升采样到 16k */
-function downsampleTo16k(input: Float32Array, inRate: number): Float32Array {
-  if (inRate === 16000) return input;
-  const ratio = inRate / 16000;
-  const outLen = Math.floor(input.length / ratio);
+/**
+ * NLS 实时识别只接受 8k/16k、16bit、单声道 PCM。浏览器 AudioContext 默认常是
+ * 44100/48000Hz，必须先正确重采样再发送。
+ *
+ * 降采样时先做半窗滑动平均（简易抗混叠低通）再抽取：直接每 N 点抽一个会把
+ * 8kHz 以上的高频（英文 s/f/th 等齿音）混叠回语音频段，明显拉低拼写识别率。
+ * 升采样用线性插值；目标采样率相同则原样返回。
+ */
+function resamplePcm(input: Float32Array, inRate: number, outRate: number): Float32Array {
+  if (!inRate || inRate === outRate || input.length === 0) return input;
+  const ratio = inRate / outRate;
+  const outLen = Math.max(1, Math.floor(input.length / ratio));
   const out = new Float32Array(outLen);
+
+  if (ratio > 1) {
+    const half = ratio / 2;
+    for (let i = 0; i < outLen; i++) {
+      const center = (i + 0.5) * ratio - 0.5;
+      const start = Math.max(0, Math.ceil(center - half));
+      const end = Math.min(input.length - 1, Math.floor(center + half));
+      let sum = 0;
+      let count = 0;
+      for (let j = start; j <= end; j++) {
+        sum += input[j];
+        count += 1;
+      }
+      out[i] = count > 0 ? sum / count : 0;
+    }
+    return out;
+  }
+
   for (let i = 0; i < outLen; i++) {
-    out[i] = input[Math.floor(i * ratio)] || 0;
+    const pos = i * ratio;
+    const i0 = Math.floor(pos);
+    const i1 = Math.min(input.length - 1, i0 + 1);
+    const t = pos - i0;
+    out[i] = input[i0] * (1 - t) + input[i1] * t;
   }
   return out;
 }
+
+/**
+ * 优先让浏览器按目标采样率采集/重采样（16k 时无需再处理）；
+ * 老浏览器不支持带 sampleRate 的构造参数时回退默认采样率，由 resamplePcm 兜底。
+ */
+function createAudioContext(sampleRate: number): AudioContext {
+  try {
+    return new AudioContext({ sampleRate, latencyHint: "interactive" });
+  } catch {
+    return new AudioContext();
+  }
+}
+
+/** 建连到 TranscriptionStarted 之间最多缓存 3 秒音频，避免丢掉用户开口的第一个词。 */
+const MAX_PREROLL_BYTES = 16000 * 2 * 3;
+
+/** 服务端签发的实时识别参数（来自 /api/speech/nls-token，均可选、缺省用安全默认）。 */
+type AsrSessionPayload = {
+  sampleRate?: number;
+  enableIntermediateResult?: boolean;
+  enablePunctuationPrediction?: boolean;
+  maxSentenceSilence?: number;
+  vocabularyId?: string;
+  customizationId?: string;
+};
 
 type TokenPayload = {
   provider: string;
@@ -62,6 +116,7 @@ type TokenPayload = {
   appkey?: string;
   wsUrl?: string;
   expireTime?: number;
+  asr?: AsrSessionPayload;
 };
 
 /**
@@ -100,6 +155,14 @@ export class RealtimeAsrSession {
   private committed = "";
   /** 当前句中间结果 */
   private interim = "";
+  /** 目标采样率（NLS 只支持 8k/16k），由服务端 asr 配置决定 */
+  private targetRate: 8000 | 16000 = 16000;
+  /** 收到 TranscriptionStarted 前先缓存 PCM，避免丢掉用户开口的第一个词 */
+  private audioReady = false;
+  private pendingAudio: ArrayBuffer[] = [];
+  private pendingBytes = 0;
+  /** 静音增益：给 ScriptProcessor 一条到 destination 的通路，但不外放麦克风（防回声） */
+  private sink: GainNode | null = null;
 
   constructor(handlers: RealtimeAsrHandlers, options?: RealtimeAsrOptions | string) {
     this.handlers = handlers;
@@ -130,13 +193,6 @@ export class RealtimeAsrSession {
     return extractLemmaFromTranscript(this.lastText, this.targetText);
   }
 
-  /** 音频发送闸门：停止流程一开始就为 false，之后任何在途帧都被丢弃 */
-  private canSendAudio(): boolean {
-    if (this.stopRequested || this.phase !== "running") return false;
-    const ws = this.ws;
-    return !!ws && ws.readyState === WebSocket.OPEN;
-  }
-
   async start() {
     // 启动/运行/停止中重复 start 直接忽略（与原语义一致）；closed 后允许重新启动
     if (this.phase === "starting" || this.phase === "running" || this.phase === "stopping") {
@@ -158,8 +214,15 @@ export class RealtimeAsrSession {
         );
       }
 
+      this.targetRate = cred.asr?.sampleRate === 8000 ? 8000 : 16000;
       this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          channelCount: 1,
+          // ideal 只是建议，浏览器不支持也绝不报错；返回的流由 AudioContext 再统一到目标采样率
+          sampleRate: { ideal: this.targetRate },
+        },
       });
       if (this.stopRequested) {
         // stop() 在 getUserMedia 期间抢先执行，doStop 看不到这个新 stream，这里自己释放
@@ -186,7 +249,7 @@ export class RealtimeAsrSession {
         );
       }
       this.appkey = cred.appkey;
-      await this.startAliyun(cred.token, cred.appkey, cred.wsUrl);
+      await this.startAliyun(cred.token, cred.appkey, cred.wsUrl, cred.asr);
     } catch (e) {
       // 启动失败：释放麦克风与 socket，避免遗留采集
       this.cleanupAudio();
@@ -222,8 +285,16 @@ export class RealtimeAsrSession {
     }, 400);
   }
 
-  private async startAliyun(token: string, appkey: string, wsUrl: string) {
+  private async startAliyun(
+    token: string,
+    appkey: string,
+    wsUrl: string,
+    asr?: AsrSessionPayload,
+  ) {
     this.taskId = uuid32();
+    this.audioReady = false;
+    this.pendingAudio = [];
+    this.pendingBytes = 0;
     const url = `${wsUrl}?token=${encodeURIComponent(token)}`;
     const ws = new WebSocket(url);
     this.ws = ws;
@@ -273,10 +344,14 @@ export class RealtimeAsrSession {
       },
       payload: {
         format: "pcm",
-        sample_rate: 16000,
-        enable_intermediate_result: true,
-        enable_punctuation_prediction: false,
-        enable_inverse_text_normalization: true,
+        sample_rate: this.targetRate,
+        enable_intermediate_result: asr?.enableIntermediateResult !== false,
+        enable_punctuation_prediction: asr?.enablePunctuationPrediction === true,
+        // 官方说明 ITN 只把中文数字转阿拉伯数字；英文拼写模式下关掉，避免 one/two 被转成 1/2
+        enable_inverse_text_normalization: this.language === "zh",
+        max_sentence_silence: asr?.maxSentenceSilence ?? 800,
+        ...(asr?.vocabularyId ? { vocabulary_id: asr.vocabularyId } : {}),
+        ...(asr?.customizationId ? { customization_id: asr.customizationId } : {}),
       },
     };
     try {
@@ -286,30 +361,60 @@ export class RealtimeAsrSession {
     }
     this.phase = "running";
 
-    // Audio pipeline
-    const ctx = new AudioContext();
+    // Audio pipeline：优先让浏览器直接跑在目标采样率上，失败时回退由 resamplePcm 兜底
+    const ctx = createAudioContext(this.targetRate);
     this.audioCtx = ctx;
     const source = ctx.createMediaStreamSource(this.stream!);
     this.source = source;
-    // ScriptProcessor 兼容性好；buffer 4096
-    const processor = ctx.createScriptProcessor(4096, 1, 1);
+    // ScriptProcessor 兼容性好；约 100~130ms 一帧，与 NLS 推荐分片大小一致
+    const frameSamples = this.targetRate === 8000 ? 1024 : 2048;
+    const processor = ctx.createScriptProcessor(frameSamples, 1, 1);
     this.processor = processor;
     processor.onaudioprocess = (e) => {
       // 关键闸门：stopping/closed 状态直接丢帧，绝不 send（否则网关报 TASK_STATE_ERROR）
-      if (!this.canSendAudio()) return;
+      if (this.stopRequested || this.phase !== "running") return;
       const socket = this.ws;
-      if (!socket) return;
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
       const input = e.inputBuffer.getChannelData(0);
-      const down = downsampleTo16k(input, ctx.sampleRate);
-      const pcm = floatTo16BitPCM(down);
+      const pcm = floatTo16BitPCM(resamplePcm(input, ctx.sampleRate, this.targetRate));
+      if (!this.audioReady) {
+        // TranscriptionStarted 之前先攒着，收到后再按顺序补发，避免开头丢字
+        if (this.pendingBytes + pcm.byteLength <= MAX_PREROLL_BYTES) {
+          this.pendingAudio.push(pcm);
+          this.pendingBytes += pcm.byteLength;
+        }
+        return;
+      }
       try {
         socket.send(pcm);
       } catch {
         // socket 正在收尾：丢弃这一帧
       }
     };
+    // 用 0 增益节点接到 destination：保留处理链路，但不把麦克风外放（否则会回声/啸叫）
+    const sink = ctx.createGain();
+    sink.gain.value = 0;
+    this.sink = sink;
     source.connect(processor);
-    processor.connect(ctx.destination);
+    processor.connect(sink);
+    sink.connect(ctx.destination);
+  }
+
+  /** 收到 TranscriptionStarted：解锁发送并补发建连期间缓存的 PCM。 */
+  private markAudioReady() {
+    this.audioReady = true;
+    const pending = this.pendingAudio;
+    this.pendingAudio = [];
+    this.pendingBytes = 0;
+    const socket = this.ws;
+    if (this.stopRequested || !socket || socket.readyState !== WebSocket.OPEN) return;
+    for (const frame of pending) {
+      try {
+        socket.send(frame);
+      } catch {
+        break;
+      }
+    }
   }
 
   /**
@@ -449,7 +554,11 @@ export class RealtimeAsrSession {
       }
 
       if (name === "TranscriptionStarted") {
-        if (!stopping) this.handlers.onStarted?.();
+        if (!stopping) {
+          // 服务端准备好收音频了：先补发缓存的 PCM，再通知界面已启动
+          this.markAudioReady();
+          this.handlers.onStarted?.();
+        }
       } else if (name === "TranscriptionResultChanged") {
         // 当前句中间结果：替换 interim，保留已累计句子
         this.interim = msg.payload?.result || "";
@@ -490,12 +599,17 @@ export class RealtimeAsrSession {
   private cleanupAudio() {
     const processor = this.processor;
     const source = this.source;
+    const sink = this.sink;
     const ctx = this.audioCtx;
     const stream = this.stream;
     this.processor = null;
     this.source = null;
+    this.sink = null;
     this.audioCtx = null;
     this.stream = null;
+    this.audioReady = false;
+    this.pendingAudio = [];
+    this.pendingBytes = 0;
 
     if (processor) {
       processor.onaudioprocess = null;
@@ -504,6 +618,11 @@ export class RealtimeAsrSession {
       } catch {
         // ignore
       }
+    }
+    try {
+      sink?.disconnect();
+    } catch {
+      // ignore
     }
     try {
       source?.disconnect();

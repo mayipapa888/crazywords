@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from "react";
 
-type Source = "dictation" | "list";
-
 type WordbookItem = {
   entryId: string;
   word: string;
@@ -11,10 +9,8 @@ type WordbookItem = {
   glossZh: string | null;
   pos: string | null;
   example: string | null;
-  sources: Source[];
   studyCount: number;
-  lastStudiedAt: string | null;
-  addedAt: string;
+  lastStudiedAt: string;
 };
 
 type WordbookResponse = {
@@ -37,10 +33,7 @@ function formatMonthDay(iso: string | null): string {
 }
 
 function studyLabel(item: WordbookItem): string {
-  if (item.studyCount > 0) {
-    return `听写 ${item.studyCount} 次 · 最近 ${formatMonthDay(item.lastStudiedAt)}`;
-  }
-  return `加入 ${formatMonthDay(item.addedAt)}`;
+  return `听写 ${item.studyCount} 次 · 最近 ${formatMonthDay(item.lastStudiedAt)}`;
 }
 
 export default function WordbookPage() {
@@ -105,7 +98,7 @@ export default function WordbookPage() {
         <div>
           <h1 className="font-display text-xl">我的单词本</h1>
           <p className="text-xs text-[var(--muted)]">
-            共 {total} 个单词 · 听写过的与词库里的自动去重汇总
+            共 {total} 个背过的单词 · 只统计真正听写过的词
             {loading && <span className="ml-2">加载中…</span>}
           </p>
         </div>
@@ -129,7 +122,6 @@ export default function WordbookPage() {
               <th className="px-3 py-1.5 font-medium">单词</th>
               <th className="hidden px-3 py-1.5 font-medium sm:table-cell">音标</th>
               <th className="px-3 py-1.5 font-medium">释义</th>
-              <th className="px-3 py-1.5 font-medium">来源</th>
               <th className="px-3 py-1.5 font-medium">次数 / 时间</th>
             </tr>
           </thead>
@@ -150,14 +142,6 @@ export default function WordbookPage() {
                 <td className="max-w-[18rem] truncate px-3 py-1.5 text-[var(--muted)]">
                   {item.glossZh || "—"}
                 </td>
-                <td className="px-3 py-1.5">
-                  <div className="flex gap-1">
-                    {item.sources.includes("dictation") && (
-                      <span className="badge-ok badge">听写</span>
-                    )}
-                    {item.sources.includes("list") && <span className="badge">词库</span>}
-                  </div>
-                </td>
                 <td className="whitespace-nowrap px-3 py-1.5 text-[var(--muted)]">
                   {studyLabel(item)}
                 </td>
@@ -165,21 +149,21 @@ export default function WordbookPage() {
             ))}
             {loading && items.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-[var(--muted)]">
+                <td colSpan={4} className="px-3 py-10 text-center text-[var(--muted)]">
                   加载中…
                 </td>
               </tr>
             )}
             {isEmpty && (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-[var(--muted)]">
-                  还没有单词记录，去听写或导入词库
+                <td colSpan={4} className="px-3 py-10 text-center text-[var(--muted)]">
+                  还没有背过的单词，去听写几个词吧
                 </td>
               </tr>
             )}
             {error && (
               <tr>
-                <td colSpan={5} className="px-3 py-10 text-center text-[var(--danger)]">
+                <td colSpan={4} className="px-3 py-10 text-center text-[var(--danger)]">
                   {error}
                 </td>
               </tr>
@@ -198,7 +182,7 @@ export default function WordbookPage() {
           上一页
         </button>
         <p className="text-xs text-[var(--muted)]">
-          第 {page}/{pageCount} 页 · 共 {total} 条
+          第 {page}/{pageCount} 页 · 共 {total} 个背过的单词
         </p>
         <button
           type="button"
