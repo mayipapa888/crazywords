@@ -41,6 +41,8 @@ export default function NotesPage() {
   const [draftContent, setDraftContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [reviewIndex, setReviewIndex] = useState(0);
+  /** 卡片点击后弹出的详情窗口 */
+  const [modalNote, setModalNote] = useState<Note | null>(null);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
@@ -107,6 +109,19 @@ export default function NotesPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [view, visibleNotes.length, backToList]);
 
+  // 弹窗：Esc 关闭
+  useEffect(() => {
+    if (!modalNote) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setModalNote(null);
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [modalNote]);
+
   const message = error ? (
     <p className="shrink-0 text-xs text-[var(--danger)]">{error}</p>
   ) : notice ? (
@@ -139,11 +154,9 @@ export default function NotesPage() {
   }
 
   function openCard(note: Note) {
-    const index = visibleNotes.findIndex((item) => item.id === note.id);
-    setReviewIndex(index >= 0 ? index : 0);
     setError(null);
     setNotice(null);
-    setView("review");
+    setModalNote(note);
   }
 
   async function save() {
@@ -237,7 +250,7 @@ export default function NotesPage() {
               {visibleNotes.length > 0 ? (
                 <ul className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   {visibleNotes.map((note) => (
-                    <li key={note.id} className="relative h-44">
+                    <li key={note.id} className="relative h-60">
                       <article className="panel flex h-full flex-col p-3 transition-shadow hover:shadow-md">
                         <button
                           type="button"
@@ -247,7 +260,7 @@ export default function NotesPage() {
                         />
                         <div className="pointer-events-none relative z-10 flex min-h-0 flex-1 flex-col">
                           <h2 className="truncate text-sm font-bold">{note.title}</h2>
-                          <p className="mt-1 line-clamp-3 shrink-0 whitespace-pre-line break-words text-xs leading-snug text-[var(--muted)]">
+                          <p className="mt-1 line-clamp-6 flex-1 overflow-hidden whitespace-pre-line break-words text-xs leading-snug text-[var(--muted)]">
                             {note.content || "（无内容）"}
                           </p>
                           <div className="pointer-events-auto mt-auto flex shrink-0 items-center justify-between gap-2 pt-2 text-xs">
@@ -490,6 +503,53 @@ export default function NotesPage() {
             </button>
           </footer>
         </>
+      )}
+
+      {modalNote && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--ink)]/50 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`知识点：${modalNote.title}`}
+          onClick={() => setModalNote(null)}
+        >
+          <div
+            className="panel flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-[var(--line)] px-4 py-3">
+              <h2 className="min-w-0 flex-1 truncate text-base font-bold">{modalNote.title}</h2>
+              <div className="flex shrink-0 items-center gap-2 text-xs">
+                <button
+                  type="button"
+                  className="text-[var(--teal)] hover:underline"
+                  onClick={() => {
+                    const target = modalNote;
+                    setModalNote(null);
+                    startEdit(target);
+                  }}
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  className="text-[var(--muted)] hover:underline"
+                  onClick={() => setModalNote(null)}
+                >
+                  关闭
+                </button>
+              </div>
+            </header>
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3">
+              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                {modalNote.content || "（无内容）"}
+              </p>
+            </div>
+            <footer className="shrink-0 border-t border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)]">
+              更新于 {formatUpdatedAt(modalNote.updatedAt)} · 点击空白处或 Esc 关闭
+            </footer>
+          </div>
+        </div>
       )}
     </div>
   );

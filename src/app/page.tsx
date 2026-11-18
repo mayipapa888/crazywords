@@ -6,6 +6,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 type QueueItem = {
   entryId: string;
   word: string;
+  glossZh: string | null;
+  pos: string | null;
+  ipa?: string | null;
   reason: string;
   mode: string;
 };
@@ -295,10 +298,10 @@ export default function HomePage() {
                 "radial-gradient(600px 280px at 80% 20%, #2a8f7f, transparent), radial-gradient(400px 220px at 10% 90%, #c45c26aa, transparent)",
             }}
           />
-          <div className="relative max-w-xl space-y-2">
+          <div className="relative max-w-3xl space-y-2">
             <p className="font-display text-3xl tracking-tight md:text-4xl">CrazyWords</p>
-            <p className="text-base leading-relaxed text-white/85">
-              导入自有词表，设定今日目标，用麦克风完成双模式听写（释义→拼写 / 单词→中文）。
+            <p className="whitespace-nowrap text-base leading-relaxed text-white/85">
+              跬步不辍，终至千里；微光不息，自成星河！
             </p>
             <div className="flex flex-wrap gap-2 pt-1">
               <Link href="/dictation" className="btn-accent">
@@ -360,7 +363,7 @@ export default function HomePage() {
             )
           ) : queue.items.length === 0 ? (
             <p className="text-sm text-[var(--muted)]">
-              队列为空。请先到「导入」上传 CSV，或确认词条有中文释义。
+              队列为空。请先到「词库维护」导入 CSV，或确认词条有中文释义。
             </p>
           ) : (
             <ul className="divide-y divide-[var(--line)]">
@@ -369,11 +372,17 @@ export default function HomePage() {
                   <button
                     type="button"
                     onClick={() => openCard(index)}
-                    className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1.5 text-left transition hover:bg-[var(--chip)]"
+                    className="flex w-full items-center gap-3 rounded-md px-1 py-1.5 text-left transition hover:bg-[var(--chip)]"
                     title={`以卡片查看 ${item.word}`}
                   >
-                    <span className="font-medium">{item.word}</span>
-                    <span className="flex gap-2">
+                    <span className="w-36 shrink-0 truncate font-medium">{item.word}</span>
+                    <span className="hidden w-20 shrink-0 truncate text-xs text-[var(--muted)] md:block">
+                      {item.pos || "—"}
+                    </span>
+                    <span className="hidden min-w-0 flex-1 truncate text-xs text-[var(--muted)] md:block">
+                      {item.glossZh || "—"}
+                    </span>
+                    <span className="ml-auto flex shrink-0 gap-2">
                       <span className="badge">{reasonLabel(item.reason)}</span>
                       <span className="badge">{modeLabel(item.mode)}</span>
                     </span>
