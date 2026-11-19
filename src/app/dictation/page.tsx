@@ -708,12 +708,19 @@ export default function DictationPage() {
 
   const beginTimersAfterTts = useCallback(
     (item: QueueItem, immediate = false) => {
-      // 播报结束只进入等待态；麦克风权限与 ASR 会话一律由用户点「开始录音」触发，
-      // 避免一进页面就弹权限框。
+      // 播报（模式 A 读释义 / 模式 B 读单词）结束后默认自动开录；
+      // 麦克风权限已在点模式/开始听写时申请过，这里通常不会再弹窗。
       void item;
-      void immediate;
       setPhase("wait-record");
-      setCountdown("点击「开始录音」开始");
+      setCountdown(immediate ? "正在开始录音…" : "即将自动录音…");
+      if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
+      autoStartTimer.current = setTimeout(
+        () => {
+          autoStartTimer.current = null;
+          void startRealtimeRef.current();
+        },
+        immediate ? 0 : 450,
+      );
     },
     [],
   );
