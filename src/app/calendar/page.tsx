@@ -14,6 +14,14 @@ type DayStat = {
   words: number;
   correct: number;
   points: number;
+  newWords?: number;
+};
+
+type PointsRules = {
+  pointsPerWord: number;
+  checkinBonus: number;
+  newWordBonus: number;
+  listeningMinutesPerPoint: number;
 };
 
 type CalendarResponse = {
@@ -25,6 +33,7 @@ type CalendarResponse = {
   monthPoints: number;
   totalPoints: number;
   streak: number;
+  rules?: PointsRules;
 };
 
 type CalendarCell = {
@@ -174,6 +183,48 @@ function DayCell({
 
 function fmt(value: number | undefined): string {
   return value === undefined ? "—" : String(value);
+}
+
+const DEFAULT_RULES: PointsRules = {
+  pointsPerWord: 10,
+  checkinBonus: 20,
+  newWordBonus: 5,
+  listeningMinutesPerPoint: 5,
+};
+
+/** 累计积分徽章：悬停/聚焦时以列表形式展示积分规则 */
+function PointsBadge({
+  total,
+  rules,
+  label = "累计",
+}: {
+  total: number | undefined;
+  rules?: PointsRules;
+  label?: string;
+}) {
+  const r = rules ?? DEFAULT_RULES;
+  return (
+    <span className="group relative inline-flex">
+      <span className="badge badge-ok cursor-help underline decoration-dotted underline-offset-2">
+        {label} {fmt(total)} 分
+      </span>
+      <div
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full z-30 mt-1 hidden w-64 rounded-lg border border-[var(--line)] bg-[var(--panel)] p-2.5 text-left text-[11px] leading-relaxed text-[var(--muted)] shadow-xl group-hover:block group-focus-within:block"
+      >
+        <p className="mb-1 font-medium text-[var(--ink)]">积分规则</p>
+        <ul className="space-y-0.5">
+          <li>· 听写每个单词 +{r.pointsPerWord} 分（同一天同词只算一次）</li>
+          <li>· 首次学到新词 额外 +{r.newWordBonus} 分</li>
+          <li>· 当日有听写打卡 +{r.checkinBonus} 分</li>
+          <li>· 磨耳朵 每 {r.listeningMinutesPerPoint} 分钟 +1 分</li>
+        </ul>
+        <p className="mt-1 border-t border-[var(--line)] pt-1 text-[10px]">
+          答错不影响单词积分；磨耳朵积分只计入当天有听写打卡的日子
+        </p>
+      </div>
+    </span>
+  );
 }
 
 export default function CalendarPage() {
@@ -340,7 +391,7 @@ export default function CalendarPage() {
             <span className="font-medium text-[var(--ink)]">{fmt(data?.monthWords)}</span> 词 ·{" "}
             <span className="font-medium text-[var(--ink)]">{fmt(data?.monthPoints)}</span> 分
           </span>
-          <span className="badge badge-ok">累计 {fmt(data?.totalPoints)} 分</span>
+          <PointsBadge total={data?.totalPoints} rules={data?.rules} />
           <span className="badge">连续 {fmt(data?.streak)} 天</span>
           <span className="badge" title="本月磨耳朵累计时长">
             🎧 本月磨耳朵{" "}
@@ -454,9 +505,9 @@ export default function CalendarPage() {
           </span>{" "}
           分钟
         </p>
-        <p className="text-[11px]">积分：每词 +10 分 · 当日打卡 +20 分</p>
+        <p className="text-[11px]">把鼠标移到「累计积分」上可查看积分规则</p>
         <p className="flex items-center gap-2">
-          <span className="badge badge-ok">累计积分 {fmt(data?.totalPoints)}</span>
+          <PointsBadge total={data?.totalPoints} rules={data?.rules} label="累计积分" />
           <span className="badge">连续打卡 {fmt(data?.streak)} 天</span>
         </p>
       </div>

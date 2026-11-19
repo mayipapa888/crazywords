@@ -5,6 +5,10 @@ import { prisma } from "@/lib/db";
 const POINTS_PER_WORD = 10;
 /** 当天有打卡（至少 1 个 attempt）的额外积分 */
 const CHECKIN_BONUS = 20;
+/** 首次学到一个新词（该词历史第一次出现）的额外积分 */
+const NEW_WORD_BONUS = 5;
+/** 磨耳朵多少秒计 1 分 */
+const LISTENING_SECONDS_PER_POINT = 300;
 
 const TZ = "Asia/Shanghai";
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
@@ -45,13 +49,24 @@ export async function GET(req: Request) {
     const month = rawMonth && MONTH_RE.test(rawMonth) ? rawMonth : currentMonth;
 
     // 汇总累计积分与连续天数需要全部历史；单用户逐日聚合在内存中完成。
-    const attempts = await prisma.attempt.findMany({
-      where: { session: { userId: auth.user.id } },
-      select: { entryId: true, overallOk: true, createdAt: true },
-    });
+    const [attempts, listeningLogs] = await Promise.all([
+      prisma.attempt.findMany({
+        where: { session: { userId: auth.user.id } },
+        select: { entryId: true, overallOk: true, createdAt: true },
+      }),
+      prisma.listeningLog.findMany({
+        where: { userId: auth.user.id },
+        select: { date: true, seconds: true },
+      }),
+    ]);
+
+    const listeningByDay = new Map<string, number>();
+    for (const log of listeningLogs) listeningByDay.set(log.date, log.seconds);
 
     type DayAgg = { entries: Set<string>; correct: Set<string> };
     const byDay = new Map<string, DayAgg>();
+    /** 每个词历史最早一次听写所在日，用于判定「首次学新词」 */
+    const firstSeenDay = new Map<string, string>();
 
     for (const attempt of attempts) {
       const key = dayKey(attempt.createdAt);
@@ -62,9 +77,21 @@ export async function GET(req: Request) {
       }
       agg.entries.add(attempt.entryId);
       if (attempt.overallOk) agg.correct.add(attempt.entryId);
+
+      const first = firstSeenDay.get(attempt.entryId);
+      if (!first || key < first) firstSeenDay.set(attempt.entryId, key);
     }
 
-    const days: Record<string, { words: number; correct: number; points: number }> = {};
+    // 每天的新词数量
+    const newWordsByDay = new Map<string, number>();
+    for (const day of firstSeenDay.values()) {
+      newWordsByDay.set(day, (newWordsByDay.get(day) ?? 0) + 1);
+    }
+
+    const days: Record<
+      string,
+      { words: number; correct: number; points: number; newWords: number }
+    > = {};
     let monthWords = 0;
     let monthDays = 0;
     let monthPoints = 0;
@@ -75,12 +102,17 @@ export async function GET(req: Request) {
       if (!agg) continue;
 
       const words = agg.entries.size;
-      const points = words * POINTS_PER_WORD + CHECKIN_BONUS;
+      const newWords = newWordsByDay.get(key) ?? 0;
+      const listeningPoints = Math.floor(
+        (listeningByDay.get(key) ?? 0) / LISTENING_SECONDS_PER_POINT,
+      );
+      const points =
+        words * POINTS_PER_WORD + CHECKIN_BONUS + newWords * NEW_WORD_BONUS + listeningPoints;
       totalPoints += points;
 
       if (!key.startsWith(`${month}-`)) continue;
 
-      days[key] = { words, correct: agg.correct.size, points };
+      days[key] = { words, correct: agg.correct.size, points, newWords };
       monthWords += words;
       monthDays += 1;
       monthPoints += points;
@@ -109,6 +141,12 @@ export async function GET(req: Request) {
         monthPoints,
         totalPoints,
         streak,
+        rules: {
+          pointsPerWord: POINTS_PER_WORD,
+          checkinBonus: CHECKIN_BONUS,
+          newWordBonus: NEW_WORD_BONUS,
+          listeningMinutesPerPoint: Math.round(LISTENING_SECONDS_PER_POINT / 60),
+        },
       },
       auth,
     );
