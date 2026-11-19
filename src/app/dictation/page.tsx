@@ -500,33 +500,7 @@ export default function DictationPage() {
         if (!live.trim() && !spellingInput) {
           setError("未获得识别文本。请开口作答，或点「开始录音」重试。");
           setPhase("wait-record");
-          // 空提交不判错：回到等待态，同时保留原有的自动开录兜底与手动按钮
-          const mEmpty =
-            current.mode === "meaning" || current.mode === "cloze"
-              ? "meaning"
-              : "gloss";
-          if (mEmpty === "meaning") {
-            autoStartTimer.current = setTimeout(() => {
-              autoStartTimer.current = null;
-              void startRealtimeRef.current();
-            }, 400);
-          } else {
-            let left = timersRef.current.autoStartRecordSeconds;
-            setCountdown(`${left}s 后自动开始录音`);
-            tickTimer.current = setInterval(() => {
-              left -= 1;
-              if (left <= 0) {
-                if (tickTimer.current) clearInterval(tickTimer.current);
-                setCountdown(null);
-              } else {
-                setCountdown(`${left}s 后自动开始录音`);
-              }
-            }, 1000);
-            autoStartTimer.current = setTimeout(() => {
-              autoStartTimer.current = null;
-              void startRealtimeRef.current();
-            }, timersRef.current.autoStartRecordSeconds * 1000);
-          }
+          setCountdown("点击「开始录音」继续");
           return;
         }
 
@@ -715,34 +689,14 @@ export default function DictationPage() {
 
   const beginTimersAfterTts = useCallback(
     (item: QueueItem, immediate = false) => {
-      const m =
-        item.mode === "meaning" || item.mode === "cloze" ? "meaning" : "gloss";
-      // 模式 B 或重试场景：播报结束立刻开录
-      if (m === "meaning" || immediate) {
-        setPhase("wait-record");
-        // 用 ref 派发，避免拿到上一轮渲染里被 feedback 守卫拦住的旧 startRealtime
-        void startRealtimeRef.current();
-        return;
-      }
-
-      let left = timers.autoStartRecordSeconds;
+      // 播报结束只进入等待态；麦克风权限与 ASR 会话一律由用户点「开始录音」触发，
+      // 避免一进页面就弹权限框。
+      void item;
+      void immediate;
       setPhase("wait-record");
-      setCountdown(`${left}s 后自动开始录音`);
-      tickTimer.current = setInterval(() => {
-        left -= 1;
-        if (left <= 0) {
-          if (tickTimer.current) clearInterval(tickTimer.current);
-          setCountdown(null);
-        } else {
-          setCountdown(`${left}s 后自动开始录音`);
-        }
-      }, 1000);
-
-      autoStartTimer.current = setTimeout(() => {
-        void startRealtimeRef.current();
-      }, timers.autoStartRecordSeconds * 1000);
+      setCountdown("点击「开始录音」开始");
     },
-    [timers.autoStartRecordSeconds],
+    [],
   );
 
   // 进入新题：先 TTS，结束后再计时（模式 A）/ 直接开录（模式 B）
@@ -798,7 +752,7 @@ export default function DictationPage() {
     void (async () => {
       await speakEntry(current, gen);
       if (wordGen.current !== gen) return;
-      // 重试：播报结束立即开录，不再等 autoStartRecordSeconds
+      // 重试：播报结束后回到等待态，由用户点「开始录音」开录
       beginTimersAfterTts(current, true);
     })();
   }, [current, clearTimers, speakEntry, beginTimersAfterTts, stopAnswerSpeech]);
@@ -823,7 +777,7 @@ export default function DictationPage() {
 
   if (!sessionId) {
     return (
-      <div className="flex h-full max-w-lg flex-col gap-2">
+      <div className="flex h-full w-full flex-col gap-2">
         <h1 className="font-display text-xl">听写</h1>
         <div className="panel space-y-3 p-4">
           <p className="text-sm text-[var(--muted)]">
@@ -899,7 +853,7 @@ export default function DictationPage() {
 
   if (index >= items.length) {
     return (
-      <div className="panel p-8 max-w-lg space-y-4">
+      <div className="panel w-full space-y-4 p-8">
         <h1 className="font-display text-3xl">本轮完成</h1>
         <p className="text-[var(--muted)]">共完成 {items.length} 词。</p>
         <button
@@ -920,7 +874,7 @@ export default function DictationPage() {
   const liveSegments = mode === "meaning" ? segmentChinese(liveText) : [];
 
   return (
-    <div className="flex h-full max-w-2xl flex-col gap-2">
+    <div className="flex h-full w-full flex-col gap-2">
       <div className="flex shrink-0 items-center justify-between gap-3">
         <h1 className="font-display text-xl">听写</h1>
         <p className="text-[var(--muted)] text-xs">

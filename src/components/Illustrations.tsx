@@ -367,3 +367,76 @@ export function SparkArt({ className }: IllustrationProps) {
     </svg>
   );
 }
+
+/** 打卡页：戴耳机的卡通小人，纯装饰 */
+export function KidArt({ className }: IllustrationProps) {
+  const grad = useArtId("kid-shirt");
+  const skin = useArtId("kid-skin");
+  return (
+    <svg
+      viewBox="0 0 120 120"
+      role="presentation"
+      aria-hidden="true"
+      className={className}
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <defs>
+        <linearGradient id={grad} x1="0" y1="0" x2="1" y2="1">
+          <stop stopColor="#22D3EE" />
+          <stop offset="0.55" stopColor="#6366F1" />
+          <stop offset="1" stopColor="#8B5CF6" />
+        </linearGradient>
+        <linearGradient id={skin} x1="0" y1="0" x2="0" y2="1">
+          <stop stopColor="#FFE3C7" />
+          <stop offset="1" stopColor="#FFCFA6" />
+        </linearGradient>
+      </defs>
+
+      {/* 身体 */}
+      <path
+        d="M32 118c0-18 12.5-30 28-30s28 12 28 30H32Z"
+        fill={`url(#${grad})`}
+      />
+      {/* 脖子 */}
+      <rect x="54" y="78" width="12" height="12" rx="6" fill={`url(#${skin})`} />
+      {/* 头 */}
+      <circle cx="60" cy="52" r="27" fill={`url(#${skin})`} />
+      {/* 头发 */}
+      <path
+        d="M33 48c0-16 12-27 27-27s27 11 27 27c0-6-6-9-11-9-4 0-6 2-10 2s-6-3-11-3-9 2-13 4c-4 2-9 2-9 6Z"
+        fill="#3B2A20"
+      />
+      {/* 耳机 */}
+      <path
+        d="M30 52a30 30 0 0 1 60 0"
+        stroke="#111827"
+        strokeWidth="5"
+        strokeLinecap="round"
+      />
+      <rect x="22" y="50" width="11" height="18" rx="5.5" fill="#111827" />
+      <rect x="87" y="50" width="11" height="18" rx="5.5" fill="#111827" />
+      {/* 眼睛 */}
+      <circle cx="50" cy="53" r="3.1" fill="#1F2937" />
+      <circle cx="70" cy="53" r="3.1" fill="#1F2937" />
+      <circle cx="51" cy="52" r="1" fill="#fff" />
+      <circle cx="71" cy="52" r="1" fill="#fff" />
+      {/* 腮红 */}
+      <ellipse cx="43" cy="61" rx="4" ry="2.6" fill="#FF9E8A" fillOpacity="0.55" />
+      <ellipse cx="77" cy="61" rx="4" ry="2.6" fill="#FF9E8A" fillOpacity="0.55" />
+      {/* 笑 */}
+      <path
+        d="M54 62c2.6 3.2 9.4 3.2 12 0"
+        stroke="#1F2937"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+      {/* 星星装饰 */}
+      <path
+        d="M98 24c.5 3.6 2.9 6 6.5 6.5-3.6.5-6 2.9-6.5 6.5-.5-3.6-2.9-6-6.5-6.5 3.6-.5 6-2.9 6.5-6.5Z"
+        fill="#FBBF24"
+      />
+      <circle cx="20" cy="30" r="2.4" fill="#22D3EE" fillOpacity="0.8" />
+    </svg>
+  );
+}

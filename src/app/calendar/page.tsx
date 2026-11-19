@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import { KidArt } from "@/components/Illustrations";
 
 type DayStat = {
   words: number;
@@ -290,6 +291,9 @@ export default function CalendarPage() {
   const selectedStat = selectedKey ? dayStats?.[selectedKey] : undefined;
   const selectedListening = selectedKey ? (listeningDays?.[selectedKey] ?? 0) : 0;
 
+  /** 今日已获得的积分（用于打卡卡片上的小人下方展示） */
+  const todayPoints = data?.today ? (dayStats?.[data.today]?.points ?? 0) : 0;
+
   const goMonth = (delta: number) => {
     if (!data) return;
     setSelectedKey(null);
@@ -323,6 +327,13 @@ export default function CalendarPage() {
           </div>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
+          <div className="flex flex-col items-center rounded-xl border border-[var(--line)] bg-[var(--panel)] px-3 py-1.5 shadow-sm">
+            <KidArt className="h-14 w-auto anim-float" />
+            <p className="mt-0.5 text-[11px] leading-none text-[var(--muted)]">今日获得</p>
+            <p className="mt-0.5 text-sm font-medium leading-none text-[var(--accent)]">
+              +{fmt(todayPoints)} 积分
+            </p>
+          </div>
           <span>
             本月 <span className="font-medium text-[var(--ink)]">{fmt(data?.monthDays)}</span>{" "}
             天 ·{" "}
