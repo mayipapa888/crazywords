@@ -319,10 +319,10 @@ export default function HomePage() {
                 开始今日听写
               </Link>
               <Link
-                href="/import"
+                href="/lookup"
                 className="btn-secondary border-white/20 bg-white/10 text-white hover:bg-white/20"
               >
-                导入 CSV
+                去查词
               </Link>
             </div>
           </div>
