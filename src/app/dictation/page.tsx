@@ -175,8 +175,14 @@ export default function DictationPage() {
     autoNextWordSeconds: 30,
   });
   const [countdown, setCountdown] = useState<string | null>(null);
+  /** 会话进行中切换模式/范围时的提示：只改 state，点「重新开始」才生效 */
+  const [settingsHint, setSettingsHint] = useState<string | null>(null);
+  /** 当前会话实际使用的范围（切换范围后只有重开才更新） */
+  const [sessionSource, setSessionSource] = useState<QueueSource>("today");
 
   const asrRef = useRef<RealtimeAsrSession | null>(null);
+  /** 进入页面自动申请麦克风，只申请一次（React 严格模式双执行也不会重复弹窗） */
+  const micRequestedRef = useRef(false);
   const submitLock = useRef(false);
   const wordGen = useRef(0);
   const liveTextRef = useRef("");
@@ -402,10 +408,18 @@ export default function DictationPage() {
     }
   }, [micOk]);
 
+  // 点击导航「听写」进入本页即申请麦克风；权限被拒只在页面内提示，不拦截进入
+  useEffect(() => {
+    if (micRequestedRef.current) return;
+    micRequestedRef.current = true;
+    void requestMic();
+  }, [requestMic]);
+
   async function startSession() {
     void requestMic();
     setBusy(true);
     setError(null);
+    setSettingsHint(null);
     setFeedback(null);
     setIndex(0);
     setSpelling("");
@@ -446,6 +460,7 @@ export default function DictationPage() {
         return;
       }
       setSessionId(data.sessionId);
+      setSessionSource(source);
       setItems(rawItems.map((it) => ({ ...it, mode: selectedMode })));
     } catch {
       setError("无法开始会话");
@@ -792,118 +807,237 @@ export default function DictationPage() {
     };
   }, [clearTimers, stopAsr, stopAnswerSpeech, stopTtsSpeech]);
 
-  if (!sessionId) {
+  /** 清空会话状态，回到「未开始」的单屏布局（不自动开始新一轮） */
+  function resetToIdle() {
+    // 作废尚未结束的 TTS 流程与正解播报，再停 ASR / 计时器
+    wordGen.current += 1;
+    clearTimers();
+    void stopAsr();
+    stopAnswerSpeech();
+    stopTtsSpeech();
+    submitLock.current = false;
+    setSessionId(null);
+    setItems([]);
+    setIndex(0);
+    setSpelling("");
+    setMeaningText("");
+    setLiveText("");
+    liveTextRef.current = "";
+    spellingRef.current = "";
+    meaningRef.current = "";
+    setFeedback(null);
+    setTtsNote(null);
+    setPhase("idle");
+    setCountdown(null);
+    setSettingsHint(null);
+  }
+
+  /** 「重新开始」：先确认（避免误点丢进度），结束当前会话后按当前模式/范围重开 */
+  function restartSession() {
+    if (sessionId) {
+      const confirmed = window.confirm(
+        "重新开始会结束当前会话并从第 1 词重来，确定吗？",
+      );
+      if (!confirmed) return;
+      void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" }).catch(
+        () => undefined,
+      );
+    }
+    resetToIdle();
+    void startSession();
+  }
+
+  /** 会话未开跑时切换即生效；正在跑则只改 state 并提示需「重新开始」 */
+  function changeMode(next: DictationMode) {
+    if (next === selectedMode) return;
+    setSelectedMode(next);
+    if (!sessionId || next === mode) {
+      setSettingsHint(null);
+      return;
+    }
+    setSettingsHint(
+      `已切换为${next === "gloss" ? "模式 A" : "模式 B"}，点「重新开始」生效`,
+    );
+  }
+
+  function changeSource(next: QueueSource) {
+    if (next === source) return;
+    setSource(next);
+    if (!sessionId || next === sessionSource) {
+      setSettingsHint(null);
+      return;
+    }
+    const label =
+      RANGE_OPTIONS.find((option) => option.value === next)?.label ?? next;
+    setSettingsHint(`已切换范围：${label}，点「重新开始」生效`);
+  }
+
+  if (sessionId && index >= items.length) {
     return (
       <div className="flex h-full w-full flex-col gap-2">
-        <h1 className="font-display text-xl">听写</h1>
-        <div className="panel space-y-3 p-4">
-          <p className="text-sm text-[var(--muted)]">
-            {`请选择本轮模式。答对叮咚后进入下一词；答错红叉可「重试本词」或「下一个」，并自动朗读正解（释义×${ANSWER_REPEAT} · 单词×${ANSWER_REPEAT}）。`}
-          </p>
-
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="panel m-auto w-full max-w-md space-y-4 p-6 text-center">
+          <h1 className="font-display text-2xl">本轮完成</h1>
+          <p className="text-sm text-[var(--muted)]">共完成 {items.length} 词。</p>
+          <div className="flex items-center justify-center gap-2">
             <button
               type="button"
-              className={`rounded-lg border px-3 py-3 text-left transition ${
-                selectedMode === "gloss"
-                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                  : "border-[var(--line)] hover:border-[var(--accent)]"
-              }`}
-              onClick={() => { setSelectedMode("gloss"); void requestMic(); }}
+              className="btn-secondary px-3 py-1.5 text-xs"
+              onClick={resetToIdle}
             >
-              <span className="font-display block text-base">模式 A</span>
-              <span className="text-xs text-[var(--muted)]">中文 → 拼写朗读</span>
+              返回听写
             </button>
             <button
               type="button"
-              className={`rounded-lg border px-3 py-3 text-left transition ${
-                selectedMode === "meaning"
-                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                  : "border-[var(--line)] hover:border-[var(--accent)]"
-              }`}
-              onClick={() => { setSelectedMode("meaning"); void requestMic(); }}
+              className="btn-primary px-3 py-1.5 text-xs"
+              disabled={busy}
+              onClick={() => {
+                resetToIdle();
+                void startSession();
+              }}
             >
-              <span className="font-display block text-base">模式 B</span>
-              <span className="text-xs text-[var(--muted)]">单词 → 说中文</span>
+              再听一轮
             </button>
           </div>
-
-          <div className="space-y-1">
-            <p className="label mb-0">听写范围</p>
-            <div className="grid grid-cols-3 gap-2">
-              {RANGE_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={`rounded-lg border px-2 py-1.5 text-center text-xs transition ${
-                    source === option.value
-                      ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                      : "border-[var(--line)] hover:border-[var(--accent)]"
-                  }`}
-                  onClick={() => setSource(option.value)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {error && (
-            <p className="rounded-md bg-[var(--danger-soft)] px-3 py-2 text-sm text-[var(--danger)]">
-              {error}
-            </p>
-          )}
-          <button type="button" className="btn-primary w-full" disabled={busy} onClick={startSession}>
-            {busy
-              ? "准备中…"
-              : selectedMode === "gloss"
-                ? "开始模式 A 听写"
-                : "开始模式 B 听写"}
-          </button>
-          <p className="text-xs text-[var(--muted)]">
-            开录 / 自动判定秒数可在「设置」调整。模式 A 在中文播报结束后再计时开录。
-          </p>
         </div>
       </div>
     );
   }
 
-  if (index >= items.length) {
-    return (
-      <div className="panel w-full space-y-4 p-8">
-        <h1 className="font-display text-3xl">本轮完成</h1>
-        <p className="text-[var(--muted)]">共完成 {items.length} 词。</p>
-        <button
-          type="button"
-          className="btn-primary"
-          onClick={() => {
-            setSessionId(null);
-            setItems([]);
-            setIndex(0);
-          }}
-        >
-          返回选模式
-        </button>
-      </div>
-    );
-  }
-
   const liveSegments = mode === "meaning" ? segmentChinese(liveText) : [];
+  const modeLabel =
+    selectedMode === "gloss" ? "模式 A · 中文→拼写" : "模式 B · 单词→中文";
+  const rangeLabel =
+    RANGE_OPTIONS.find((option) => option.value === source)?.label ?? source;
+  const activeModeLabel =
+    mode === "gloss" ? "模式 A · 中文→拼写" : "模式 B · 单词→中文";
+  const activeRangeLabel =
+    RANGE_OPTIONS.find((option) => option.value === sessionSource)?.label ??
+    sessionSource;
+  const total = items.length;
+  const progressLabel = sessionId
+    ? `第 ${Math.min(index + 1, total)}/${total} 词`
+    : "尚未开始";
+  const micLabel = recording
+    ? "● 录音中"
+    : micOk
+      ? "麦克风已就绪"
+      : "麦克风待授权";
+  const settingsBtnClass = (active: boolean) =>
+    `rounded-md border px-2 py-1 transition ${
+      active
+        ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+        : "border-[var(--line)] text-[var(--ink)] hover:border-[var(--accent)]"
+    }`;
 
   return (
     <div className="flex h-full w-full flex-col gap-2">
-      <div className="flex shrink-0 items-center justify-between gap-3">
-        <h1 className="font-display text-xl">听写</h1>
-        <p className="text-[var(--muted)] text-xs">
-          {index + 1} / {items.length}
-          <span className="badge ml-2">
-            {mode === "gloss" ? "模式 A · 中文→拼写" : "模式 B · 单词→中文"}
+      {/* 顶部工具栏：模式 / 范围 / 开始·重新开始 + 状态行（不随内容滚动） */}
+      <div className="panel shrink-0 px-2.5 py-2">
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1.5 text-xs">
+          <span className="text-[var(--muted)]">模式</span>
+          <button
+            type="button"
+            className={settingsBtnClass(selectedMode === "gloss")}
+            aria-pressed={selectedMode === "gloss"}
+            onClick={() => changeMode("gloss")}
+          >
+            模式 A
+          </button>
+          <button
+            type="button"
+            className={settingsBtnClass(selectedMode === "meaning")}
+            aria-pressed={selectedMode === "meaning"}
+            onClick={() => changeMode("meaning")}
+          >
+            模式 B
+          </button>
+
+          <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+
+          <span className="text-[var(--muted)]">范围</span>
+          {RANGE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={settingsBtnClass(source === option.value)}
+              aria-pressed={source === option.value}
+              onClick={() => changeSource(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+
+          <button
+            type="button"
+            className="btn-primary ml-auto shrink-0 px-3 py-1 text-xs"
+            disabled={busy}
+            onClick={() => {
+              if (sessionId) {
+                restartSession();
+              } else {
+                void startSession();
+              }
+            }}
+          >
+            {sessionId ? "重新开始" : busy ? "准备中…" : "开始听写"}
+          </button>
+        </div>
+
+        <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+          <span className="text-[var(--muted)]">{progressLabel}</span>
+          {sessionId && <span className="badge">{activeModeLabel}</span>}
+          {sessionId && <span className="badge">{activeRangeLabel}</span>}
+          <span
+            className={`rounded px-2 py-0.5 ${
+              recording
+                ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                : "bg-[var(--chip)] text-[var(--muted)]"
+            }`}
+          >
+            {micLabel}
           </span>
-        </p>
+          {countdown && (
+            <span className="rounded bg-[var(--accent-soft)] px-2 py-0.5 text-[var(--accent)]">
+              {countdown}
+            </span>
+          )}
+          {ttsNote && (
+            <span className="rounded bg-[var(--chip)] px-2 py-0.5 text-[var(--muted)]">
+              {ttsNote}
+              {phase === "tts" ? " · 播报中" : ""}
+            </span>
+          )}
+          {settingsHint && (
+            <span className="rounded bg-[var(--accent-soft)] px-2 py-0.5 text-[var(--accent)]">
+              {settingsHint}
+            </span>
+          )}
+        </div>
       </div>
 
-      <div className="panel flex min-h-0 flex-1 flex-col gap-2 p-3">
-        {mode === "gloss" ? (
+      {/* 作答区：占满剩余高度，只在内部滚动，页面不出现滚动条 */}
+      <div className="panel flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-3">
+        {!sessionId || !current ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
+            <p className="font-display text-lg">点上方「开始听写」开始本轮</p>
+            <p className="text-xs text-[var(--muted)]">
+              {`${modeLabel} · 范围：${rangeLabel}`}
+            </p>
+            <p className="max-w-md text-xs text-[var(--muted)]">
+              {`答对自动下一词；答错可「重试本词」或「下一个」，并朗读正解（释义×${ANSWER_REPEAT} · 单词×${ANSWER_REPEAT}）。`}
+            </p>
+            <p className="max-w-md text-xs text-[var(--muted)]">
+              进入页面已自动申请麦克风；未授权只在此提示，不影响进入听写。
+            </p>
+            {error && (
+              <p className="max-w-md rounded-md bg-[var(--danger-soft)] px-3 py-2 text-xs text-[var(--danger)]">
+                {error}
+              </p>
+            )}
+          </div>
+        ) : (
+          <>
+            {mode === "gloss" ? (
           <div className="shrink-0">
             <p className="label mb-0">中文释义</p>
             <p className="font-display text-xl leading-snug">{current.glossZh}</p>
@@ -919,15 +1053,13 @@ export default function DictationPage() {
         )}
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          {ttsNote && (
-            <span className="rounded bg-[var(--chip)] px-2 py-1 text-xs text-[var(--muted)]">
-              {ttsNote}
-              {phase === "tts" ? " · 播报中" : ""}
-            </span>
-          )}
-          {countdown && (
-            <span className="rounded bg-[var(--accent-soft)] px-2 py-1 text-xs text-[var(--accent)]">
-              {countdown}
+          {!feedback && (
+            <span className="text-xs text-[var(--muted)]">
+              {phase === "tts"
+                ? "播报结束后自动开录"
+                : recording
+                  ? "录音中，静音 3 秒自动判定"
+                  : "等待开录"}
             </span>
           )}
           {!feedback && !recording && !busy && (phase === "tts" || phase === "wait-record") && (
@@ -973,7 +1105,7 @@ export default function DictationPage() {
           )}
         </section>
 
-        <section className="shrink-0 space-y-2 rounded-lg border border-[var(--line)] p-2.5">
+        <section className="no-scrollbar max-h-[50vh] shrink-0 space-y-2 overflow-y-auto rounded-lg border border-[var(--line)] p-2.5">
           <p className="label mb-0">判定区</p>
 
           {!feedback ? (
@@ -1075,6 +1207,8 @@ export default function DictationPage() {
             </div>
           )}
         </section>
+          </>
+        )}
       </div>
     </div>
   );
