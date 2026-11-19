@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NoteArt } from "@/components/Illustrations";
+import { sanitizeHtml } from "@/lib/notes/sanitize";
 
 type Note = {
   id: string;
   title: string;
   content: string;
+  contentHtml: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -18,6 +20,47 @@ type NotesResponse = {
 };
 
 type View = "list" | "edit" | "review";
+
+/** 富文本详情/复习视图的排版：段落、列表间距 + 内联字号/颜色由 HTML 自带的 style 生效。 */
+const RICH_CONTENT_CLASS =
+  "break-words text-sm leading-relaxed [&_div]:my-1 [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1.5 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5";
+
+const TEXT_COLORS = [
+  { value: "#0f2f3d", label: "黑色" },
+  { value: "#1d4ed8", label: "深蓝" },
+  { value: "#7c3aed", label: "紫色" },
+  { value: "#0ea5a0", label: "青色" },
+  { value: "#f2743a", label: "橙色" },
+  { value: "#e11d48", label: "红色" },
+  { value: "#16a34a", label: "绿色" },
+  { value: "#5d7385", label: "灰色" },
+];
+
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      case '"':
+        return "&quot;";
+      default:
+        return "&#39;";
+    }
+  });
+}
+
+/** 旧笔记只有纯文本时，按行转成 <p> 注入编辑器；空行用 <p><br></p> 占位。 */
+function plainTextToHtml(text: string): string {
+  if (!text) return "";
+  return text
+    .split(/\r?\n/)
+    .map((line) => (line ? `<p>${escapeHtml(line)}</p>` : "<p><br></p>"))
+    .join("");
+}
 
 function formatUpdatedAt(iso: string): string {
   const date = new Date(iso);
@@ -39,11 +82,14 @@ export default function NotesPage() {
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
-  const [draftContent, setDraftContent] = useState("");
+  const [draftHtml, setDraftHtml] = useState("");
   const [saving, setSaving] = useState(false);
   const [reviewIndex, setReviewIndex] = useState(0);
   /** 卡片点击后弹出的详情窗口 */
   const [modalNote, setModalNote] = useState<Note | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+  /** 工具栏（下拉框/取色器）会抢焦点，记住最近一次编辑器内的选区以便恢复。 */
+  const savedRangeRef = useRef<Range | null>(null);
 
   const loadNotes = useCallback(async () => {
     setLoading(true);
@@ -52,7 +98,14 @@ export default function NotesPage() {
       const res = await fetch("/api/notes");
       const data = (await res.json().catch(() => ({}))) as NotesResponse;
       if (!res.ok) throw new Error(data.error || "加载知识点失败");
-      setNotes(Array.isArray(data.notes) ? data.notes : []);
+      const list = Array.isArray(data.notes) ? data.notes : [];
+      // 渲染前统一做一次白名单过滤，详情/复习/编辑都只接触 sanitize 后的 HTML。
+      setNotes(
+        list.map((note) => ({
+          ...note,
+          contentHtml: note.contentHtml ? sanitizeHtml(note.contentHtml) : null,
+        })),
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "加载知识点失败");
     } finally {
@@ -123,6 +176,102 @@ export default function NotesPage() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [modalNote]);
 
+  // 进入编辑视图时清空上次记住的选区（旧编辑器的 DOM 节点已失效）。
+  useEffect(() => {
+    if (view !== "edit") return;
+    savedRangeRef.current = null;
+  }, [view, editingId]);
+
+  function nodeInsideEditor(node: Node | null): boolean {
+    const editor = editorRef.current;
+    return Boolean(editor && node && editor.contains(node));
+  }
+
+  function rememberSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    if (!nodeInsideEditor(selection.anchorNode) || !nodeInsideEditor(selection.focusNode)) return;
+    savedRangeRef.current = selection.getRangeAt(0).cloneRange();
+  }
+
+  /** 恢复编辑器内的选区（工具栏 select / color input 会抢走焦点）。 */
+  function restoreEditorSelection(): boolean {
+    const editor = editorRef.current;
+    if (!editor) return false;
+    if (document.activeElement !== editor) editor.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    if (!selection) return false;
+
+    const saved = savedRangeRef.current;
+    if (saved && nodeInsideEditor(saved.commonAncestorContainer)) {
+      try {
+        selection.removeAllRanges();
+        selection.addRange(saved);
+        return true;
+      } catch {
+        // 选区节点被 execCommand 拆分后可能失效，退回当前光标位置。
+      }
+    }
+    return selection.rangeCount > 0 && nodeInsideEditor(selection.anchorNode);
+  }
+
+  function applyCommand(command: "bold" | "italic" | "underline" | "removeFormat") {
+    if (!restoreEditorSelection()) return;
+    document.execCommand(command, false);
+    rememberSelection();
+  }
+
+  function applyColor(color: string) {
+    if (!restoreEditorSelection()) return;
+    // 临时开启 styleWithCSS，让 foreColor 产出 <span style="color: …"> 而非 <font>。
+    let previous = false;
+    try {
+      previous = document.queryCommandState("styleWithCSS");
+    } catch {
+      previous = false;
+    }
+    document.execCommand("styleWithCSS", false, "true");
+    document.execCommand("foreColor", false, color);
+    document.execCommand("styleWithCSS", false, String(previous));
+    rememberSelection();
+  }
+
+  /** 字号：把选中文字替换成带内联 font-size 的 span（简单可靠，不依赖 fontSize 1..7）。 */
+  function applyFontSize(size: number) {
+    if (!restoreEditorSelection()) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (range.collapsed) return;
+    const text = range.toString();
+    if (!text) return;
+    const html = `<span style="font-size:${size}px">${escapeHtml(text).replace(/\r?\n/g, "<br>")}</span>`;
+    document.execCommand("insertHTML", false, html);
+    rememberSelection();
+  }
+
+  /** 粘贴只取纯文本，杜绝外部样式/脚本/图片进入编辑器。 */
+  function handlePaste(event: React.ClipboardEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const text = event.clipboardData.getData("text/plain");
+    if (!text) return;
+
+    const inserted = document.execCommand("insertText", false, text);
+    if (!inserted) {
+      const selection = window.getSelection();
+      if (!selection || selection.rangeCount === 0) return;
+      const range = selection.getRangeAt(0);
+      range.deleteContents();
+      const textNode = document.createTextNode(text);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    rememberSelection();
+  }
+
   const message = error ? (
     <p className="shrink-0 text-xs text-[var(--danger)]">{error}</p>
   ) : notice ? (
@@ -132,7 +281,7 @@ export default function NotesPage() {
   function startCreate() {
     setEditingId(null);
     setDraftTitle("");
-    setDraftContent("");
+    setDraftHtml("");
     setError(null);
     setNotice(null);
     setView("edit");
@@ -141,7 +290,7 @@ export default function NotesPage() {
   function startEdit(note: Note) {
     setEditingId(note.id);
     setDraftTitle(note.title);
-    setDraftContent(note.content);
+    setDraftHtml(note.contentHtml ? sanitizeHtml(note.contentHtml) : plainTextToHtml(note.content));
     setError(null);
     setNotice(null);
     setView("edit");
@@ -162,8 +311,15 @@ export default function NotesPage() {
 
   async function save() {
     if (saving) return;
-    if (!draftContent.trim()) {
+    const editor = editorRef.current;
+    const contentHtml = sanitizeHtml(editor?.innerHTML ?? "");
+    const content = editor?.innerText ?? "";
+    if (!content.trim()) {
       setError("内容不能为空");
+      return;
+    }
+    if (contentHtml.length > 20000) {
+      setError("富文本内容过长（最多 20000 字符）");
       return;
     }
 
@@ -175,7 +331,8 @@ export default function NotesPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: draftTitle.trim() || "未命名",
-          content: draftContent,
+          content,
+          contentHtml: contentHtml || null,
         }),
       });
       const data = (await res.json().catch(() => ({}))) as NotesResponse;
@@ -359,7 +516,7 @@ export default function NotesPage() {
             <div>
               <h1 className="font-display text-xl">{editingId ? "编辑知识点" : "新建知识点"}</h1>
               <p className="text-xs text-[var(--muted)]">
-                支持多行，适合词语辨析、语法笔记、易混点对比。
+                支持加粗、字号与颜色，适合词语辨析、语法笔记、易混点对比。
               </p>
             </div>
             <button
@@ -383,12 +540,107 @@ export default function NotesPage() {
               value={draftTitle}
               onChange={(e) => setDraftTitle(e.target.value)}
             />
-            <textarea
-              className="field no-scrollbar min-h-0 flex-1 resize-none leading-relaxed"
-              placeholder="内容，可多行…"
+            <div
+              className="flex shrink-0 flex-wrap items-center gap-1 text-xs"
+              role="toolbar"
+              aria-label="文字格式工具栏"
+            >
+              <button
+                type="button"
+                className="btn-secondary px-2 py-1 text-xs font-bold"
+                title="加粗（Ctrl/⌘ + B）"
+                aria-label="加粗"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyCommand("bold")}
+              >
+                B
+              </button>
+              <button
+                type="button"
+                className="btn-secondary px-2 py-1 text-xs italic"
+                title="斜体（Ctrl/⌘ + I）"
+                aria-label="斜体"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyCommand("italic")}
+              >
+                I
+              </button>
+              <button
+                type="button"
+                className="btn-secondary px-2 py-1 text-xs underline"
+                title="下划线（Ctrl/⌘ + U）"
+                aria-label="下划线"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyCommand("underline")}
+              >
+                U
+              </button>
+              <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+              <select
+                className="field w-20 shrink-0 py-1 text-xs"
+                aria-label="字号"
+                title="字号（作用于选中文字）"
+                defaultValue=""
+                onChange={(e) => {
+                  const size = Number(e.target.value);
+                  if (size > 0) applyFontSize(size);
+                  e.currentTarget.value = "";
+                }}
+              >
+                <option value="">字号</option>
+                <option value="14">14px</option>
+                <option value="16">16px</option>
+                <option value="18">18px</option>
+                <option value="20">20px</option>
+                <option value="24">24px</option>
+              </select>
+              <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+              {TEXT_COLORS.map((color) => (
+                <button
+                  key={color.value}
+                  type="button"
+                  className="h-5 w-5 shrink-0 rounded border border-[var(--line)] transition hover:scale-110"
+                  style={{ backgroundColor: color.value }}
+                  title={`颜色：${color.label}`}
+                  aria-label={`颜色：${color.label}`}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => applyColor(color.value)}
+                />
+              ))}
+              <input
+                type="color"
+                className="h-6 w-8 shrink-0 cursor-pointer rounded border border-[var(--line)] bg-transparent p-0"
+                defaultValue="#0f2f3d"
+                title="自定义颜色"
+                aria-label="自定义颜色"
+                onChange={(e) => applyColor(e.target.value)}
+              />
+              <span className="mx-1 h-4 w-px bg-[var(--line)]" aria-hidden="true" />
+              <button
+                type="button"
+                className="btn-secondary px-2 py-1 text-xs"
+                title="清除选中文字的格式"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyCommand("removeFormat")}
+              >
+                清除格式
+              </button>
+            </div>
+            {/* 初始 HTML 已先经 sanitize；之后编辑内容由浏览器管理，draftHtml 不变时重渲染不会重置。 */}
+            <div
+              ref={editorRef}
+              role="textbox"
+              aria-multiline="true"
               aria-label="知识点内容"
-              value={draftContent}
-              onChange={(e) => setDraftContent(e.target.value)}
+              contentEditable
+              suppressContentEditableWarning
+              spellCheck={false}
+              className="field no-scrollbar min-h-[12rem] flex-1 overflow-y-auto break-words text-sm leading-relaxed"
+              dangerouslySetInnerHTML={{ __html: draftHtml }}
+              onInput={rememberSelection}
+              onMouseUp={rememberSelection}
+              onKeyUp={rememberSelection}
+              onPaste={handlePaste}
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                   e.preventDefault();
@@ -399,7 +651,9 @@ export default function NotesPage() {
           </div>
 
           <footer className="flex shrink-0 items-center justify-between gap-2">
-            <p className="text-xs text-[var(--muted)]">Ctrl / ⌘ + Enter 保存</p>
+            <p className="text-xs text-[var(--muted)]">
+              选中文字后可加粗 / 设字号 / 改颜色 · Ctrl / ⌘ + Enter 保存
+            </p>
             <div className="flex gap-2">
               <button
                 type="button"
@@ -453,9 +707,18 @@ export default function NotesPage() {
                 </div>
                 <div
                   key={reviewNote.id}
-                  className="no-scrollbar min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words px-4 py-3 text-sm leading-relaxed"
+                  className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3"
                 >
-                  {reviewNote.content || "（无内容）"}
+                  {reviewNote.contentHtml ? (
+                    <div
+                      className={RICH_CONTENT_CLASS}
+                      dangerouslySetInnerHTML={{ __html: reviewNote.contentHtml }}
+                    />
+                  ) : (
+                    <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                      {reviewNote.content || "（无内容）"}
+                    </p>
+                  )}
                 </div>
               </div>
             ) : (
@@ -543,9 +806,16 @@ export default function NotesPage() {
               </div>
             </header>
             <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                {modalNote.content || "（无内容）"}
-              </p>
+              {modalNote.contentHtml ? (
+                <div
+                  className={RICH_CONTENT_CLASS}
+                  dangerouslySetInnerHTML={{ __html: modalNote.contentHtml }}
+                />
+              ) : (
+                <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
+                  {modalNote.content || "（无内容）"}
+                </p>
+              )}
             </div>
             <footer className="shrink-0 border-t border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)]">
               更新于 {formatUpdatedAt(modalNote.updatedAt)} · 点击空白处或 Esc 关闭

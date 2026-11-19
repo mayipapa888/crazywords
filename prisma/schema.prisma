@@ -156,12 +156,14 @@ model ListeningLog {
 }
 
 model KnowledgeNote {
-  id        String   @id @default(cuid())
-  userId    String
-  title     String
-  content   String // 多行文本，词语辨析或语法笔记
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id          String   @id @default(cuid())
+  userId      String
+  title       String
+  content     String // 多行纯文本，词语辨析或语法笔记（列表摘要 / 搜索用）
+  /// 富文本 HTML；为空时回退到 content 纯文本
+  contentHtml String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

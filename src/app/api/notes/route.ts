@@ -6,15 +6,40 @@ type NoteRecord = {
   userId: string;
   title: string;
   content: string;
+  contentHtml: string | null;
   createdAt: Date;
   updatedAt: Date;
 };
+
+const HTML_MAX_LENGTH = 20000;
+
+/**
+ * 基础 HTML 安全校验：拒绝 <script / <iframe / 标签内 on*= 事件属性。
+ * 真正的白名单过滤在浏览器端 src/lib/notes/sanitize.ts 完成。
+ */
+const UNSAFE_HTML_PATTERN =
+  /<\s*\/?\s*(?:script|iframe)|<\s*[a-z][^>]*(?:\s|\/)on[a-z]+\s*=/i;
+
+function parseContentHtml(
+  raw: unknown,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (raw === null) return { ok: true, value: null };
+  if (typeof raw !== "string") return { ok: false, error: "富文本格式不正确" };
+  if (raw.length > HTML_MAX_LENGTH) {
+    return { ok: false, error: "富文本内容过长（最多 20000 字符）" };
+  }
+  if (UNSAFE_HTML_PATTERN.test(raw)) {
+    return { ok: false, error: "富文本包含不安全的标签或属性" };
+  }
+  return { ok: true, value: raw.trim() ? raw : null };
+}
 
 function toPayload(note: NoteRecord) {
   return {
     id: note.id,
     title: note.title,
     content: note.content,
+    contentHtml: note.contentHtml,
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
   };
@@ -56,11 +81,21 @@ export async function POST(req: Request) {
       return errorJson(Object.assign(new Error("内容不能为空"), { status: 400 }), 400);
     }
 
+    let contentHtml: string | null = null;
+    if (body.contentHtml !== undefined) {
+      const parsed = parseContentHtml(body.contentHtml);
+      if (!parsed.ok) {
+        return errorJson(Object.assign(new Error(parsed.error), { status: 400 }), 400);
+      }
+      contentHtml = parsed.value;
+    }
+
     const note = await notesDb.knowledgeNote.create({
       data: {
         userId: auth.user.id,
         title: title || "未命名",
         content,
+        contentHtml,
       },
     });
     return jsonWithSession({ note: toPayload(note) }, auth, { status: 201 });
