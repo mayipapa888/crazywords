@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { BookArt } from "@/components/Illustrations";
 
 type Entry = {
   id: string;
@@ -686,8 +687,13 @@ export default function WordsPage() {
             ))}
             {!loading && entries.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-3 py-8 text-center text-[var(--muted)]">
-                  {listId ? "该词库暂无词条。" : "暂无词条，请先导入 CSV。"}
+                <td colSpan={5} className="px-3 py-8">
+                  <div className="anim-fade-up flex flex-col items-center gap-2 text-center text-[var(--muted)]">
+                    <BookArt className="h-20 w-auto opacity-80" />
+                    <p className="text-sm">
+                      {listId ? "该词库暂无词条。" : "暂无词条，请先导入 CSV。"}
+                    </p>
+                  </div>
                 </td>
               </tr>
             )}

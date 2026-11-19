@@ -91,28 +91,57 @@ function intensityStyle(words: number): CSSProperties {
   return { backgroundColor: "var(--paper)", color: "var(--muted)" };
 }
 
+/** 格子内紧凑写法：12m / <1m */
+function compactListening(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  return minutes > 0 ? `${minutes}m` : "<1m";
+}
+
+/** 详情/汇总里的完整写法：12 分 30 秒 */
+function fullListening(seconds: number): string {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes <= 0) return `${rest} 秒`;
+  return rest === 0 ? `${minutes} 分` : `${minutes} 分 ${rest} 秒`;
+}
+
 function DayCell({
   cell,
   stat,
+  listeningSeconds,
   isToday,
+  isSelected,
+  onSelect,
 }: {
   cell: CalendarCell;
   stat: DayStat | undefined;
+  listeningSeconds: number;
   isToday: boolean;
+  isSelected: boolean;
+  onSelect: () => void;
 }) {
   const words = stat?.words ?? 0;
   const dark = words >= 20;
   const detail = stat
     ? `${stat.correct} 词正确 · ${stat.points} 分`
     : "未打卡";
+  const listeningDetail =
+    listeningSeconds > 0 ? ` · 磨耳朵 ${fullListening(listeningSeconds)}` : "";
+
+  const ringClass = isToday
+    ? "ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--panel)]"
+    : isSelected
+      ? "ring-2 ring-[var(--ink)] ring-offset-1 ring-offset-[var(--panel)]"
+      : "";
 
   return (
-    <div
-      className={`flex min-h-0 flex-col justify-between rounded-md border border-[var(--line)] px-1.5 py-1 ${
-        isToday ? "ring-2 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--panel)]" : ""
-      }`}
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-pressed={isSelected}
+      className={`flex min-h-0 cursor-pointer flex-col justify-between rounded-md border border-[var(--line)] px-1.5 py-1 text-left ${ringClass}`}
       style={intensityStyle(words)}
-      title={`${cell.key} · ${words} 词 · ${detail}`}
+      title={`${cell.key} · ${words} 词 · ${detail}${listeningDetail}`}
     >
       <div className="flex items-center justify-between gap-1">
         <span className="text-[11px] font-semibold leading-none">{cell.day}</span>
@@ -126,10 +155,19 @@ function DayCell({
           </span>
         )}
       </div>
-      <span className="truncate text-[11px] leading-none">
-        {words > 0 ? `${words} 词` : "—"}
-      </span>
-    </div>
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="truncate text-[11px] leading-none">
+          {words > 0 ? `${words} 词` : "—"}
+        </span>
+        {listeningSeconds > 0 && (
+          <span
+            className={`truncate text-[10px] leading-none ${dark ? "text-white/85" : "text-[var(--muted)]"}`}
+          >
+            🎧 {compactListening(listeningSeconds)}
+          </span>
+        )}
+      </div>
+    </button>
   );
 }
 
@@ -141,6 +179,9 @@ export default function CalendarPage() {
   const [data, setData] = useState<CalendarResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** 最近 35 天磨耳朵时长（date → 秒），来自 /api/listening/time */
+  const [listeningDays, setListeningDays] = useState<Record<string, number> | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async (targetMonth: string | null) => {
@@ -199,11 +240,59 @@ export default function CalendarPage() {
     };
   }, [load]);
 
+  // 磨耳朵时长（最近 35 天）单独取一次，失败不影响打卡主视图
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadListening = async () => {
+      try {
+        const res = await fetch("/api/listening/time", { cache: "no-store" });
+        if (!res.ok) return;
+        const payload: unknown = await res.json().catch(() => null);
+        if (cancelled || !payload || typeof payload !== "object") return;
+        const days = (payload as { days?: unknown }).days;
+        if (!Array.isArray(days)) return;
+
+        const map: Record<string, number> = {};
+        for (const item of days) {
+          if (!item || typeof item !== "object") continue;
+          const date = (item as { date?: unknown }).date;
+          const seconds = (item as { seconds?: unknown }).seconds;
+          if (typeof date === "string" && typeof seconds === "number" && seconds > 0) {
+            map[date] = seconds;
+          }
+        }
+        setListeningDays(map);
+      } catch {
+        // 静默：仅缺少磨耳朵一行
+      }
+    };
+
+    void loadListening();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const calendar = useMemo(() => buildCalendar(data?.month ?? ""), [data?.month]);
   const dayStats = data?.days;
 
+  // 本月磨耳朵总秒数（满 35 天窗口内可覆盖当月）
+  const monthListeningSeconds = useMemo(() => {
+    if (!listeningDays || !data) return 0;
+    const prefix = `${data.month}-`;
+    return Object.entries(listeningDays).reduce(
+      (sum, [key, seconds]) => (key.startsWith(prefix) ? sum + seconds : sum),
+      0,
+    );
+  }, [listeningDays, data]);
+
+  const selectedStat = selectedKey ? dayStats?.[selectedKey] : undefined;
+  const selectedListening = selectedKey ? (listeningDays?.[selectedKey] ?? 0) : 0;
+
   const goMonth = (delta: number) => {
     if (!data) return;
+    setSelectedKey(null);
     void load(shiftMonth(data.month, delta));
   };
 
@@ -233,7 +322,7 @@ export default function CalendarPage() {
             </button>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2 text-xs text-[var(--muted)]">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
           <span>
             本月 <span className="font-medium text-[var(--ink)]">{fmt(data?.monthDays)}</span>{" "}
             天 ·{" "}
@@ -242,6 +331,10 @@ export default function CalendarPage() {
           </span>
           <span className="badge badge-ok">累计 {fmt(data?.totalPoints)} 分</span>
           <span className="badge">连续 {fmt(data?.streak)} 天</span>
+          <span className="badge" title="本月磨耳朵累计时长">
+            🎧 本月磨耳朵{" "}
+            {listeningDays === null ? "—" : Math.round(monthListeningSeconds / 60)} 分钟
+          </span>
         </div>
       </div>
 
@@ -272,27 +365,66 @@ export default function CalendarPage() {
         </div>
 
         {data ? (
-          <div
-            className="grid min-h-0 flex-1 grid-cols-7 gap-1"
-            style={{ gridTemplateRows: `repeat(${calendar.rows || 1}, minmax(0, 1fr))` }}
-          >
-            {calendar.cells.map((cell, index) =>
-              cell ? (
-                <DayCell
-                  key={cell.key}
-                  cell={cell}
-                  stat={dayStats?.[cell.key]}
-                  isToday={data.today === cell.key}
-                />
+          <>
+            <div
+              className="grid min-h-0 flex-1 grid-cols-7 gap-1"
+              style={{ gridTemplateRows: `repeat(${calendar.rows || 1}, minmax(0, 1fr))` }}
+            >
+              {calendar.cells.map((cell, index) =>
+                cell ? (
+                  <DayCell
+                    key={cell.key}
+                    cell={cell}
+                    stat={dayStats?.[cell.key]}
+                    listeningSeconds={listeningDays?.[cell.key] ?? 0}
+                    isToday={data.today === cell.key}
+                    isSelected={selectedKey === cell.key}
+                    onSelect={() =>
+                      setSelectedKey((current) => (current === cell.key ? null : cell.key))
+                    }
+                  />
+                ) : (
+                  <div
+                    key={`empty-${index}`}
+                    className="rounded-md border border-transparent"
+                    aria-hidden="true"
+                  />
+                ),
+              )}
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 border-t border-[var(--line)] pt-1 text-[11px] text-[var(--muted)]">
+              {selectedKey ? (
+                <>
+                  <span className="font-medium text-[var(--ink)]">
+                    {Number(selectedKey.slice(-2))} 日详情
+                  </span>
+                  <span>
+                    听写{" "}
+                    <span className="font-medium text-[var(--ink)]">
+                      {selectedStat?.words ?? 0}
+                    </span>{" "}
+                    词 · 正确{" "}
+                    <span className="font-medium text-[var(--ink)]">
+                      {selectedStat?.correct ?? 0}
+                    </span>{" "}
+                    词 ·{" "}
+                    <span className="font-medium text-[var(--ink)]">
+                      {selectedStat?.points ?? 0}
+                    </span>{" "}
+                    分
+                  </span>
+                  <span>
+                    🎧 磨耳朵{" "}
+                    <span className="font-medium text-[var(--ink)]">
+                      {selectedListening > 0 ? fullListening(selectedListening) : "—"}
+                    </span>
+                  </span>
+                </>
               ) : (
-                <div
-                  key={`empty-${index}`}
-                  className="rounded-md border border-transparent"
-                  aria-hidden="true"
-                />
-              ),
-            )}
-          </div>
+                <span>点击日期查看当天详情</span>
+              )}
+            </div>
+          </>
         ) : (
           <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-[var(--muted)]">
             {error ? "无法加载打卡数据" : "加载中…"}
@@ -304,7 +436,12 @@ export default function CalendarPage() {
         <p>
           本月打卡 <span className="font-medium text-[var(--ink)]">{fmt(data?.monthDays)}</span> 天 ·
           本月 <span className="font-medium text-[var(--ink)]">{fmt(data?.monthWords)}</span> 词 ·
-          本月 <span className="font-medium text-[var(--ink)]">{fmt(data?.monthPoints)}</span> 分
+          本月 <span className="font-medium text-[var(--ink)]">{fmt(data?.monthPoints)}</span> 分 ·
+          磨耳朵{" "}
+          <span className="font-medium text-[var(--ink)]">
+            {listeningDays === null ? "—" : Math.round(monthListeningSeconds / 60)}
+          </span>{" "}
+          分钟
         </p>
         <p className="text-[11px]">积分：每词 +10 分 · 当日打卡 +20 分</p>
         <p className="flex items-center gap-2">

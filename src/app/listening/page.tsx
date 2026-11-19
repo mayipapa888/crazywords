@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   LISTENING_MATERIALS,
   bilibiliEmbedUrl,
@@ -9,8 +9,20 @@ import {
   pickDailyPart,
 } from "@/lib/listening/materials";
 
+/** 上报间隔：每 30 秒累计一次 30 秒收听时长 */
+const TICK_MS = 30_000;
+const STEP_SECONDS = 30;
+
 function todayLabel(date = new Date()): string {
   return `${date.getMonth() + 1} 月 ${date.getDate()} 日`;
+}
+
+/** 12 分 30 秒 / 45 秒 / 8 分 */
+function formatListening(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  return seconds === 0 ? `${minutes} 分` : `${minutes} 分 ${seconds} 秒`;
 }
 
 export default function ListeningPage() {
@@ -18,6 +30,76 @@ export default function ListeningPage() {
   const suggestedPart = useMemo(() => pickDailyPart(daily.pages), [daily.pages]);
   const [part, setPart] = useState(suggestedPart);
   const material = LISTENING_MATERIALS[0] ?? daily;
+
+  /** 今日已听秒数；null 表示尚未取到 */
+  const [todaySeconds, setTodaySeconds] = useState<number | null>(null);
+  /** 同一时刻只允许一次上报，避免网络慢时请求堆积 */
+  const inFlightRef = useRef(false);
+
+  // 进入页面先取一次今日累计
+  useEffect(() => {
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const res = await fetch("/api/listening/time", { cache: "no-store" });
+        if (!res.ok) return;
+        const payload: unknown = await res.json().catch(() => null);
+        if (cancelled || !payload || typeof payload !== "object") return;
+        const today = (payload as { today?: unknown }).today;
+        if (typeof today === "number" && Number.isFinite(today)) {
+          setTodaySeconds(today);
+        }
+      } catch {
+        // 读取失败不打扰播放，标签保持「…」
+      }
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 计时：仅当页面可见时每 30 秒上报 30 秒；隐藏期间不计时
+  useEffect(() => {
+    let disposed = false;
+
+    const report = async () => {
+      if (disposed || inFlightRef.current) return;
+      inFlightRef.current = true;
+      try {
+        const res = await fetch("/api/listening/time", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ seconds: STEP_SECONDS }),
+          keepalive: true,
+        });
+        if (!res.ok) return;
+        const payload: unknown = await res.json().catch(() => null);
+        if (disposed || !payload || typeof payload !== "object") return;
+        const total = (payload as { seconds?: unknown }).seconds;
+        if (typeof total === "number" && Number.isFinite(total)) {
+          setTodaySeconds(total);
+        }
+      } catch {
+        // 本轮失败直接跳过，不重试堆叠，等下一个 30 秒再上报
+      } finally {
+        inFlightRef.current = false;
+      }
+    };
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void report();
+      }
+    }, TICK_MS);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   function go(delta: number) {
     setPart((current) => {
@@ -61,6 +143,13 @@ export default function ListeningPage() {
       <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--line)] px-3 py-2">
           <h2 className="min-w-0 flex-1 truncate text-sm font-bold">{material.title}</h2>
+          <span
+            className="badge shrink-0"
+            title="本页可见时每 30 秒累计一次；切到后台自动暂停"
+            aria-live="polite"
+          >
+            🎧 今日已听 {todaySeconds === null ? "…" : formatListening(todaySeconds)}
+          </span>
           <label className="flex shrink-0 items-center gap-1 text-xs text-[var(--muted)]">
             第
             <select

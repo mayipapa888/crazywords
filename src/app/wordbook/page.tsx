@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { BookArt } from "@/components/Illustrations";
 
 type WordbookItem = {
   entryId: string;
@@ -156,8 +157,11 @@ export default function WordbookPage() {
             )}
             {isEmpty && (
               <tr>
-                <td colSpan={4} className="px-3 py-10 text-center text-[var(--muted)]">
-                  还没有背过的单词，去听写几个词吧
+                <td colSpan={4} className="px-3 py-8">
+                  <div className="anim-fade-up flex flex-col items-center gap-2 text-center text-[var(--muted)]">
+                    <BookArt className="h-20 w-auto opacity-80" />
+                    <p className="text-sm">还没有背过的单词，去听写几个词吧</p>
+                  </div>
                 </td>
               </tr>
             )}

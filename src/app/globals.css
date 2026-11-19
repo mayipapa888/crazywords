@@ -119,3 +119,140 @@ body {
     color: var(--ok);
   }
 }
+
+/* ============================================================
+   视觉增强（全部为新增规则 / 新增属性，不改动上面的既有声明）
+   ============================================================ */
+
+/* 极淡的紫青径向渐变，叠加在原有 body 背景之上（固定层，不参与布局） */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(720px 520px at 82% -10%, rgba(124, 92, 255, 0.1), transparent 65%),
+    radial-gradient(860px 560px at 4% 108%, rgba(34, 211, 238, 0.09), transparent 62%),
+    radial-gradient(520px 380px at 50% 0%, rgba(196, 92, 38, 0.05), transparent 70%);
+}
+
+@layer components {
+  /* 玻璃感：非常轻微的透明 + 柔光阴影；hover:shadow-* 等工具类仍可覆盖 */
+  .panel {
+    box-shadow:
+      0 1px 2px rgba(18, 53, 47, 0.04),
+      0 12px 32px -20px rgba(18, 53, 47, 0.28);
+    background-color: color-mix(in srgb, var(--panel) 90%, transparent);
+    backdrop-filter: blur(6px) saturate(120%);
+    -webkit-backdrop-filter: blur(6px) saturate(120%);
+  }
+
+  /* 首页统计卡：角落柔光 + 轻微悬浮，不改变尺寸 */
+  .stat-card {
+    position: relative;
+    overflow: hidden;
+    transition:
+      transform 0.25s ease,
+      box-shadow 0.25s ease,
+      border-color 0.25s ease;
+  }
+  .stat-card::after {
+    content: "";
+    position: absolute;
+    right: -2.25rem;
+    bottom: -3rem;
+    width: 7.5rem;
+    height: 7.5rem;
+    border-radius: 9999px;
+    background: radial-gradient(
+      circle,
+      var(--stat-glow, rgba(124, 92, 255, 0.16)),
+      transparent 68%
+    );
+    pointer-events: none;
+  }
+  .stat-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(31, 111, 99, 0.35);
+    box-shadow:
+      0 2px 4px rgba(18, 53, 47, 0.05),
+      0 18px 38px -22px rgba(18, 53, 47, 0.34);
+  }
+  .stat-card-teal {
+    --stat-glow: rgba(34, 211, 238, 0.2);
+  }
+  .stat-card-warm {
+    --stat-glow: rgba(196, 92, 38, 0.18);
+  }
+
+  .stat-value {
+    @apply font-display text-3xl leading-none tracking-tight;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+/* 上下浮动：插画 / 装饰 */
+@keyframes cw-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -8px, 0);
+  }
+}
+.anim-float {
+  animation: cw-float 6s ease-in-out infinite;
+}
+
+/* 进入：淡入 + 上移。用 backwards，动画结束后让 hover transform 正常生效 */
+@keyframes cw-fade-up {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 12px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+.anim-fade-up {
+  animation: cw-fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+/* 横幅渐变流动 */
+@keyframes cw-gradient-pan {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+.anim-gradient {
+  background-size: 220% 220%;
+  animation: cw-gradient-pan 14s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .anim-float,
+  .anim-fade-up,
+  .anim-gradient {
+    animation: none !important;
+  }
+  .stat-card:hover {
+    transform: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { HeroArt, SparkArt } from "@/components/Illustrations";
 
 type QueueItem = {
   entryId: string;
@@ -290,7 +291,7 @@ export default function HomePage() {
   return (
     <>
       <div className="flex h-full flex-col gap-3">
-        <section className="relative shrink-0 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--ink)] px-5 py-5 text-[var(--paper)] md:px-8">
+        <section className="anim-fade-up relative shrink-0 overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--ink)] px-5 py-5 text-[var(--paper)] md:px-8">
           <div
             className="pointer-events-none absolute inset-0 opacity-40"
             style={{
@@ -298,7 +299,17 @@ export default function HomePage() {
                 "radial-gradient(600px 280px at 80% 20%, #2a8f7f, transparent), radial-gradient(400px 220px at 10% 90%, #c45c26aa, transparent)",
             }}
           />
-          <div className="relative max-w-3xl space-y-2">
+          <div
+            className="anim-gradient pointer-events-none absolute inset-0 opacity-25"
+            style={{
+              backgroundImage:
+                "linear-gradient(115deg, #7c5cff 0%, #22d3ee 32%, #c45c26 64%, #7c5cff 100%)",
+            }}
+          />
+          <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-56 items-center justify-center opacity-70 md:flex md:w-64">
+            <HeroArt className="anim-float h-full w-auto" />
+          </div>
+          <div className="relative max-w-3xl space-y-2 md:pr-52">
             <p className="font-display text-3xl tracking-tight md:text-4xl">CrazyWords</p>
             <p className="whitespace-nowrap text-base leading-relaxed text-white/85">
               跬步不辍，终至千里；微光不息，自成星河！
@@ -318,23 +329,47 @@ export default function HomePage() {
         </section>
 
         <section className="grid shrink-0 gap-3 sm:grid-cols-3">
-          <div className="panel p-3">
-            <p className="label">词库</p>
-            <p className="font-display text-2xl">{entryCount}</p>
-            <p className="mt-0.5 text-xs text-[var(--muted)]">条词条</p>
+          <div
+            className="panel stat-card anim-fade-up p-3"
+            style={{ animationDelay: "60ms" }}
+          >
+            <div className="relative z-10 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="label">词库</p>
+                <p className="stat-value text-[var(--teal)]">{entryCount}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">条词条</p>
+              </div>
+              <SparkArt className="h-5 w-5 shrink-0 opacity-80" />
+            </div>
           </div>
-          <div className="panel p-3">
-            <p className="label">今日队列</p>
-            <p className="font-display text-2xl">{queue?.items.length ?? "—"}</p>
-            <p className="mt-0.5 text-xs text-[var(--muted)]">
-              目标 {me?.dailyGoalDefault ?? "—"}
-              {queue?.reviewDay ? " · 复习日" : ""}
-            </p>
+          <div
+            className="panel stat-card stat-card-teal anim-fade-up p-3"
+            style={{ animationDelay: "120ms" }}
+          >
+            <div className="relative z-10 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="label">今日队列</p>
+                <p className="stat-value">{queue?.items.length ?? "—"}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">
+                  目标 {me?.dailyGoalDefault ?? "—"}
+                  {queue?.reviewDay ? " · 复习日" : ""}
+                </p>
+              </div>
+              <SparkArt className="h-5 w-5 shrink-0 opacity-80" />
+            </div>
           </div>
-          <div className="panel p-3">
-            <p className="label">活跃错词</p>
-            <p className="font-display text-2xl">{wrongCount}</p>
-            <p className="mt-0.5 text-xs text-[var(--muted)]">错词本</p>
+          <div
+            className="panel stat-card stat-card-warm anim-fade-up p-3"
+            style={{ animationDelay: "180ms" }}
+          >
+            <div className="relative z-10 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="label">活跃错词</p>
+                <p className="stat-value text-[var(--accent)]">{wrongCount}</p>
+                <p className="mt-1 text-xs text-[var(--muted)]">错词本</p>
+              </div>
+              <SparkArt className="h-5 w-5 shrink-0 opacity-80" />
+            </div>
           </div>
         </section>
 

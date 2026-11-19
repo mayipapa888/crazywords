@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { NoteArt } from "@/components/Illustrations";
 
 type Note = {
   id: string;
@@ -317,6 +318,7 @@ export default function NotesPage() {
                     </>
                   ) : notes.length === 0 ? (
                     <>
+                      <NoteArt className="h-24 w-auto opacity-80" />
                       <p className="text-sm">还没有知识点</p>
                       <p className="text-xs text-[var(--muted)]">
                         记录词语辨析、语法笔记或易混点对比，点击卡片可查看完整内容。

@@ -29,6 +29,7 @@ model User {
   wrongBookItems WrongBookItem[]
   sessions       Session[]
   notes          KnowledgeNote[]
+  listeningLogs  ListeningLog[]
 }
 
 model WordList {
@@ -137,6 +138,21 @@ model Attempt {
 
   @@index([sessionId])
   @@index([entryId])
+}
+
+/// 磨耳朵收听时长：按用户 + 自然日累加，date 为 YYYY-MM-DD（Asia/Shanghai 本地日）
+model ListeningLog {
+  id        String   @id @default(cuid())
+  userId    String
+  date      String
+  seconds   Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
 }
 
 model KnowledgeNote {
