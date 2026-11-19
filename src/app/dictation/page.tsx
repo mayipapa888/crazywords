@@ -188,6 +188,8 @@ export default function DictationPage() {
   const liveTextRef = useRef("");
   const spellingRef = useRef("");
   const meaningRef = useRef("");
+  /** 本题是否已手写输入：手写优先，ASR 结果不再覆盖输入框 */
+  const manualInputRef = useRef(false);
   const startRealtimeRef = useRef<() => Promise<void>>(async () => undefined);
   const submitAttemptRef = useRef<(transcriptOverride?: string) => Promise<void>>(
     async () => undefined,
@@ -428,6 +430,7 @@ export default function DictationPage() {
     liveTextRef.current = "";
     spellingRef.current = "";
     meaningRef.current = "";
+    manualInputRef.current = false;
     setPhase("idle");
     try {
       const [meRes, sessRes] = await Promise.all([
@@ -493,6 +496,7 @@ export default function DictationPage() {
     liveTextRef.current = "";
     spellingRef.current = "";
     meaningRef.current = "";
+    manualInputRef.current = false;
     setPhase("idle");
     setIndex((prev) => {
       const next = prev + 1;
@@ -532,11 +536,15 @@ export default function DictationPage() {
             : meaningRef.current.trim() || extractChineseFromTranscript(live);
 
         if (!live.trim() && !spellingInput) {
-          setError("未获得识别文本。请开口作答，或点「开始录音」重试。");
+          setError("未获得识别文本。请开口作答、直接输入答案，或点「开始录音」重试。");
           setPhase("wait-record");
           setCountdown("点击「开始录音」继续");
           return;
         }
+
+        // 手写答案可能在 TTS 播报期间提交：立即停播并作废播报后的自动开录流程
+        wordGen.current += 1;
+        stopTtsSpeech();
 
         const res = await fetch(`/api/sessions/${sessionId}/attempt`, {
           method: "POST",
@@ -587,7 +595,7 @@ export default function DictationPage() {
         submitLock.current = false;
       }
     },
-    [sessionId, current, feedback, clearTimers, stopAsr, nextWord, speakAnswer],
+    [sessionId, current, feedback, clearTimers, stopAsr, nextWord, speakAnswer, stopTtsSpeech],
   );
 
   submitAttemptRef.current = submitAttempt;
@@ -624,17 +632,20 @@ export default function DictationPage() {
       if (!text) return;
       liveTextRef.current = t;
       setLiveText(t);
-      if (m === "gloss") {
-        const lemma = extractLemmaFromTranscript(t, current.word);
-        if (lemma) {
-          spellingRef.current = lemma;
-          setSpelling(lemma);
-        }
-      } else {
-        const zh = extractChineseFromTranscript(t);
-        if (zh) {
-          meaningRef.current = zh;
-          setMeaningText(zh);
+      // 本题已手写作答：保留手写内容，ASR 结果只更新实时识别区，不回填输入框
+      if (!manualInputRef.current) {
+        if (m === "gloss") {
+          const lemma = extractLemmaFromTranscript(t, current.word);
+          if (lemma) {
+            spellingRef.current = lemma;
+            setSpelling(lemma);
+          }
+        } else {
+          const zh = extractChineseFromTranscript(t);
+          if (zh) {
+            meaningRef.current = zh;
+            setMeaningText(zh);
+          }
         }
       }
       speechSeenRef.current = true;
@@ -752,6 +763,7 @@ export default function DictationPage() {
     spellingRef.current = "";
     setMeaningText("");
     meaningRef.current = "";
+    manualInputRef.current = false;
     setError(null);
     submitLock.current = false;
     setPhase("tts");
@@ -787,6 +799,7 @@ export default function DictationPage() {
     spellingRef.current = "";
     setMeaningText("");
     meaningRef.current = "";
+    manualInputRef.current = false;
     submitLock.current = false;
     setPhase("tts");
     setCountdown("正在播报…");
@@ -825,6 +838,7 @@ export default function DictationPage() {
     liveTextRef.current = "";
     spellingRef.current = "";
     meaningRef.current = "";
+    manualInputRef.current = false;
     setFeedback(null);
     setTtsNote(null);
     setPhase("idle");
@@ -1110,35 +1124,47 @@ export default function DictationPage() {
 
           {!feedback ? (
             <>
-              {mode === "gloss" ? (
+              {/* 手写（键盘）作答：模式 A 输入英文拼写，模式 B 输入中文释义 */}
+              <div className="flex items-center gap-1.5">
                 <input
-                  className="field text-base"
-                  placeholder="提取拼写"
-                  value={spelling}
+                  className="field min-w-0 flex-1 text-sm"
+                  placeholder={
+                    mode === "gloss" ? "也可以直接输入拼写" : "也可以直接输入中文释义"
+                  }
+                  value={mode === "gloss" ? spelling : meaningText}
                   onChange={(e) => {
-                    spellingRef.current = e.target.value;
-                    setSpelling(e.target.value);
+                    const value = e.target.value;
+                    manualInputRef.current = true;
+                    if (mode === "gloss") {
+                      spellingRef.current = value;
+                      setSpelling(value);
+                    } else {
+                      meaningRef.current = value;
+                      setMeaningText(value);
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void submitAttemptRef.current();
+                    }
                   }}
                   autoComplete="off"
-                  autoCorrect="off"
+                  autoCapitalize="off"
                   spellCheck={false}
-                  disabled={phase === "tts"}
-                  readOnly={recording}
+                  aria-label={mode === "gloss" ? "手写拼写" : "手写中文释义"}
                 />
-              ) : (
-                <input
-                  className="field text-base"
-                  placeholder="提取中文"
-                  value={meaningText}
-                  onChange={(e) => {
-                    meaningRef.current = e.target.value;
-                    setMeaningText(e.target.value);
+                <button
+                  type="button"
+                  className="btn-primary shrink-0 px-2 py-1 text-xs"
+                  disabled={busy}
+                  onClick={() => {
+                    void submitAttemptRef.current();
                   }}
-                  autoComplete="off"
-                  disabled={phase === "tts"}
-                  readOnly={recording}
-                />
-              )}
+                >
+                  判定
+                </button>
+              </div>
               {error && (
                 <p className="rounded-md bg-[var(--danger-soft)] px-2 py-1 text-xs text-[var(--danger)]">
                   {error}

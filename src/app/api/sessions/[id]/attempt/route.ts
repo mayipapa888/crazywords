@@ -141,11 +141,13 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     let wrongKinds = "both";
 
     if (mode === "meaning") {
+      const manualMeaning = spellingInput.trim();
       extractedMeaning =
-        spellingInput.trim() ||
+        manualMeaning ||
         extractChineseFromTranscript(asrTranscript || "") ||
         null;
-      meaningOk = checkMeaning(asrTranscript, entry.glossZh);
+      // 手写中文释义优先（键盘作答），无手写输入时才用识别文本判定
+      meaningOk = checkMeaning(manualMeaning || asrTranscript, entry.glossZh);
       // 复用 Attempt 布尔字段：释义口述对则两者同为 true
       spellingOk = meaningOk;
       pronunciationOk = meaningOk;

@@ -1,6 +1,8 @@
-/** 把识别文本 / 目标词切成可比较的英文 token（小写、去标点、去首尾单引号） */
+import { toHalfWidth } from "@/lib/spelling";
+
+/** 把识别文本 / 目标词切成可比较的英文 token（全角转半角、小写、去标点、去首尾单引号） */
 function tokenize(text: string): string[] {
-  return (text || "")
+  return toHalfWidth(text || "")
     .toLowerCase()
     .replace(/[^\w\s'-]/g, " ")
     .split(/\s+/)
@@ -38,7 +40,10 @@ export function extractLemmaFromTranscript(transcript: string, targetWord?: stri
   if (tokens.length === 0) return "";
 
   if (targetWord) {
-    const target = targetWord.trim().replace(/\s+/g, " ").toLowerCase();
+    const target = toHalfWidth(targetWord)
+      .trim()
+      .replace(/\s+/g, " ")
+      .toLowerCase();
     const targetTokens = tokenize(target);
 
     // 多词短语（含空格）：按顺序匹配短语的各个词，命中则返回完整短语，

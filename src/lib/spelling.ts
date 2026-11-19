@@ -1,20 +1,40 @@
+/**
+ * 全角 → 半角归一：
+ * - 全角 ASCII（\uFF01-\uFF5E，含全角字母、数字、标点、全角连接号 －）→ 半角（码位减 0xFEE0）；
+ * - 全角空格 \u3000 → 普通空格；
+ * - 中文引号 “”‘’ → 半角 " / '；
+ * 其余字符（中文、emoji 等）原样保留。
+ */
+export function toHalfWidth(input: string): string {
+  if (!input) return input;
+  return input
+    .replace(/[\uFF01-\uFF5E]/g, (ch) =>
+      String.fromCharCode(ch.charCodeAt(0) - 0xfee0),
+    )
+    .replace(/\u3000/g, " ")
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'");
+}
+
 /** 拼写判定：忽略大小写、trim、去目标无标点时的用户标点。 */
 export function normalizeSpelling(input: string, target: string): string {
-  let s = input.trim();
-  const targetHasPunct = /[^\w\s'-]/.test(target);
+  const s = toHalfWidth(input).trim();
+  const targetHasPunct = /[^\w\s'-]/.test(toHalfWidth(target));
   if (!targetHasPunct) {
-    s = s.replace(/[^\w\s'-]/g, "");
+    return s.replace(/[^\w\s'-]/g, "").toLowerCase();
   }
   return s.toLowerCase();
 }
 
 export function checkSpelling(input: string, targetWord: string): boolean {
-  return normalizeSpelling(input, targetWord) === targetWord.trim().toLowerCase();
+  // 目标词也走同一套归一（全角目标词也能正确比对）
+  const target = normalizeSpelling(targetWord, targetWord);
+  return normalizeSpelling(input, targetWord) === target;
 }
 
-/** 转写/目标词 → 规范化 token 列表（小写、去标点） */
+/** 转写/目标词 → 规范化 token 列表（全角转半角、小写、去标点） */
 function tokenize(text: string): string[] {
-  return text
+  return toHalfWidth(text)
     .trim()
     .toLowerCase()
     .replace(/[^\w\s'-]/g, "")
