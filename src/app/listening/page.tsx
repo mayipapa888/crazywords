@@ -6,7 +6,7 @@ import {
   bilibiliEmbedUrl,
   bilibiliWatchUrl,
   pickDailyMaterial,
-  type ListeningMaterial,
+  pickDailyPart,
 } from "@/lib/listening/materials";
 
 function todayLabel(date = new Date()): string {
@@ -15,14 +15,17 @@ function todayLabel(date = new Date()): string {
 
 export default function ListeningPage() {
   const daily = useMemo(() => pickDailyMaterial(), []);
-  const dailyIndex = LISTENING_MATERIALS.findIndex((item) => item.bvid === daily.bvid);
-  const [activeIndex, setActiveIndex] = useState(dailyIndex >= 0 ? dailyIndex : 0);
-  const active: ListeningMaterial = LISTENING_MATERIALS[activeIndex] ?? daily;
-  const isDaily = active.bvid === daily.bvid;
+  const suggestedPart = useMemo(() => pickDailyPart(daily.pages), [daily.pages]);
+  const [part, setPart] = useState(suggestedPart);
+  const material = LISTENING_MATERIALS[0] ?? daily;
 
-  function step(delta: number) {
-    const total = LISTENING_MATERIALS.length;
-    setActiveIndex((current) => (current + delta + total) % total);
+  function go(delta: number) {
+    setPart((current) => {
+      const next = current + delta;
+      if (next < 1) return material.pages;
+      if (next > material.pages) return 1;
+      return next;
+    });
   }
 
   return (
@@ -31,21 +34,21 @@ export default function ListeningPage() {
         <div className="min-w-0">
           <h1 className="font-display text-xl">
             磨耳朵
-            <span className="badge ml-2 align-middle">{todayLabel()} 推荐</span>
+            <span className="badge ml-2 align-middle">{todayLabel()} 推荐第 {suggestedPart} 集</span>
           </h1>
           <p className="truncate text-xs text-[var(--muted)]">
-            每天一条初中级听力素材 · 全部为 B 站官方播放器内嵌，版权归原作者
+            每天一集初中听力 9000 句 · B 站官方播放器内嵌，版权归原作者
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <button type="button" className="btn-secondary py-1.5 text-xs" onClick={() => step(-1)}>
-            ← 上一条
+          <button type="button" className="btn-secondary py-1.5 text-xs" onClick={() => go(-1)}>
+            ← 上一集
           </button>
-          <button type="button" className="btn-secondary py-1.5 text-xs" onClick={() => step(1)}>
-            下一条 →
+          <button type="button" className="btn-secondary py-1.5 text-xs" onClick={() => go(1)}>
+            下一集 →
           </button>
           <a
-            href={bilibiliWatchUrl(active.bvid)}
+            href={bilibiliWatchUrl(material.bvid, part)}
             target="_blank"
             rel="noreferrer"
             className="btn-primary py-1.5 text-xs"
@@ -57,22 +60,35 @@ export default function ListeningPage() {
 
       <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--line)] px-3 py-2">
-          <h2 className="min-w-0 flex-1 truncate text-sm font-bold">
-            {isDaily && <span className="mr-1 text-[var(--accent)]">今日</span>}
-            {active.title}
-          </h2>
-          <span className="badge">{active.subtitle}</span>
-          <span className="badge">{active.level}</span>
+          <h2 className="min-w-0 flex-1 truncate text-sm font-bold">{material.title}</h2>
+          <label className="flex shrink-0 items-center gap-1 text-xs text-[var(--muted)]">
+            第
+            <select
+              value={part}
+              onChange={(event) => setPart(Number(event.target.value))}
+              className="rounded border border-[var(--line)] bg-[var(--paper)] px-1 py-0.5 text-xs text-[var(--ink)]"
+              aria-label="选择集数"
+            >
+              {Array.from({ length: material.pages }, (_, index) => index + 1).map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            集
+          </label>
+          <span className="badge">{material.subtitle}</span>
           <span className="badge">
-            {active.minutes} 分钟{active.pages > 1 ? ` · ${active.pages} P` : ""}
+            共 {material.pages} 集 · {material.minutes} 分钟
           </span>
+          {part === suggestedPart && <span className="badge text-[var(--accent)]">今日</span>}
         </div>
 
         <div className="relative min-h-0 flex-1 bg-black">
           <iframe
-            key={active.bvid}
-            src={bilibiliEmbedUrl(active.bvid)}
-            title={active.title}
+            key={`${material.bvid}-${part}`}
+            src={bilibiliEmbedUrl(material.bvid, part)}
+            title={`${material.title} 第 ${part} 集`}
             className="h-full w-full"
             allow="autoplay; fullscreen; picture-in-picture"
             allowFullScreen
@@ -84,43 +100,8 @@ export default function ListeningPage() {
         <div className="no-scrollbar shrink-0 overflow-y-auto border-t border-[var(--line)] px-3 py-2">
           <p className="text-xs leading-relaxed text-[var(--muted)]">
             <span className="text-[var(--ink)]">UP 主：</span>
-            {active.up主} · {active.note}
+            {material.up主} · {material.note}
           </p>
-        </div>
-      </section>
-
-      <section className="panel shrink-0 px-3 py-2">
-        <div className="no-scrollbar flex gap-2 overflow-x-auto">
-          {LISTENING_MATERIALS.map((item, index) => {
-            const isActive = index === activeIndex;
-            const isToday = item.bvid === daily.bvid;
-            return (
-              <button
-                key={item.bvid}
-                type="button"
-                onClick={() => setActiveIndex(index)}
-                title={`${item.title}（${item.up主}）`}
-                className={`flex w-44 shrink-0 flex-col gap-1 rounded-lg border px-2.5 py-2 text-left transition ${
-                  isActive
-                    ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                    : "border-[var(--line)] hover:border-[var(--accent)]"
-                }`}
-              >
-                <span className="line-clamp-2 text-xs font-medium leading-snug">{item.title}</span>
-                <span className="flex items-center gap-1 text-[11px] text-[var(--muted)]">
-                  {isToday && <span className="text-[var(--accent)]">今日 ·</span>}
-                  {item.minutes} 分钟
-                </span>
-                <span className="flex flex-wrap gap-1">
-                  {item.tags.slice(0, 2).map((tag) => (
-                    <span key={tag} className="badge text-[10px]">
-                      {tag}
-                    </span>
-                  ))}
-                </span>
-              </button>
-            );
-          })}
         </div>
       </section>
     </div>
