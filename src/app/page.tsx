@@ -296,14 +296,14 @@ export default function HomePage() {
             className="pointer-events-none absolute inset-0 opacity-40"
             style={{
               background:
-                "radial-gradient(600px 280px at 80% 20%, #2a8f7f, transparent), radial-gradient(400px 220px at 10% 90%, #c45c26aa, transparent)",
+                "radial-gradient(600px 280px at 80% 20%, #14c8aa, transparent), radial-gradient(400px 220px at 10% 90%, #ff8a4ccc, transparent)",
             }}
           />
           <div
             className="anim-gradient pointer-events-none absolute inset-0 opacity-25"
             style={{
               backgroundImage:
-                "linear-gradient(115deg, #7c5cff 0%, #22d3ee 32%, #c45c26 64%, #7c5cff 100%)",
+                "linear-gradient(115deg, #8b5cf6 0%, #22d3ee 34%, #ff8a4c 66%, #8b5cf6 100%)",
             }}
           />
           <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-56 items-center justify-center opacity-70 md:flex md:w-64">

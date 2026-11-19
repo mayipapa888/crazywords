@@ -3,22 +3,23 @@
 @tailwind utilities;
 
 :root {
-  --paper: #f3f6f4;
+  --paper: #f8fbff;
   --panel: #ffffff;
-  --ink: #12352f;
-  --muted: #5b6e68;
-  --line: #d5e0db;
-  --chip: #e7efea;
-  --accent: #c45c26;
-  --accent-soft: #f7e8df;
-  --teal: #1f6f63;
-  --teal-soft: #d9ebe7;
-  --danger: #a11d2e;
-  --danger-soft: #f8e4e7;
-  --ok: #1b6b3a;
-  --ok-soft: #dff3e7;
-  --glow-a: #c8ddd6;
-  --glow-b: #e8d5c4;
+  --ink: #0f2f3d;
+  --muted: #5d7385;
+  --line: #dbe6f0;
+  --chip: #eaf3fb;
+  --accent: #f2743a;
+  --accent-soft: #fff0e6;
+  --teal: #0ea5a0;
+  --teal-soft: #dcf7f4;
+  --danger: #e11d48;
+  --danger-soft: #ffe8ee;
+  --ok: #16a34a;
+  --ok-soft: #e2f8ea;
+  --glow-a: #cfe6ff;
+  --glow-b: #ffe3cf;
+  --glow-c: #dcfff4;
 }
 
 html,
@@ -30,9 +31,10 @@ body {
 body {
   color: var(--ink);
   background:
-    radial-gradient(1200px 600px at 10% -10%, var(--glow-a), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, var(--glow-b), transparent 50%),
-    linear-gradient(180deg, #eef4f1 0%, var(--paper) 40%, #e9f0ec 100%);
+    radial-gradient(1200px 600px at 8% -12%, var(--glow-a), transparent 58%),
+    radial-gradient(900px 520px at 100% -4%, var(--glow-b), transparent 52%),
+    radial-gradient(800px 500px at 50% 110%, var(--glow-c), transparent 55%),
+    linear-gradient(180deg, #f2f9ff 0%, var(--paper) 42%, #f4fbf9 100%);
   font-family: "Microsoft YaHei", "微软雅黑", "PingFang SC", "Hiragino Sans GB",
     "Segoe UI", sans-serif;
 }
@@ -132,20 +134,21 @@ body::before {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(720px 520px at 82% -10%, rgba(124, 92, 255, 0.1), transparent 65%),
-    radial-gradient(860px 560px at 4% 108%, rgba(34, 211, 238, 0.09), transparent 62%),
-    radial-gradient(520px 380px at 50% 0%, rgba(196, 92, 38, 0.05), transparent 70%);
+    radial-gradient(720px 520px at 82% -10%, rgba(99, 102, 241, 0.16), transparent 66%),
+    radial-gradient(860px 560px at 4% 108%, rgba(14, 165, 233, 0.15), transparent 64%),
+    radial-gradient(520px 380px at 50% 0%, rgba(242, 116, 58, 0.1), transparent 70%),
+    radial-gradient(600px 420px at 92% 96%, rgba(20, 200, 170, 0.12), transparent 66%);
 }
 
 @layer components {
   /* 玻璃感：非常轻微的透明 + 柔光阴影；hover:shadow-* 等工具类仍可覆盖 */
   .panel {
     box-shadow:
-      0 1px 2px rgba(18, 53, 47, 0.04),
-      0 12px 32px -20px rgba(18, 53, 47, 0.28);
-    background-color: color-mix(in srgb, var(--panel) 90%, transparent);
-    backdrop-filter: blur(6px) saturate(120%);
-    -webkit-backdrop-filter: blur(6px) saturate(120%);
+      0 1px 2px rgba(15, 47, 61, 0.04),
+      0 14px 34px -22px rgba(15, 47, 61, 0.3);
+    background-color: color-mix(in srgb, var(--panel) 94%, transparent);
+    backdrop-filter: blur(8px) saturate(125%);
+    -webkit-backdrop-filter: blur(8px) saturate(125%);
   }
 
   /* 首页统计卡：角落柔光 + 轻微悬浮，不改变尺寸 */
@@ -174,16 +177,16 @@ body::before {
   }
   .stat-card:hover {
     transform: translateY(-2px);
-    border-color: rgba(31, 111, 99, 0.35);
+    border-color: rgba(14, 165, 160, 0.45);
     box-shadow:
       0 2px 4px rgba(18, 53, 47, 0.05),
       0 18px 38px -22px rgba(18, 53, 47, 0.34);
   }
   .stat-card-teal {
-    --stat-glow: rgba(34, 211, 238, 0.2);
+    --stat-glow: rgba(14, 165, 233, 0.28);
   }
   .stat-card-warm {
-    --stat-glow: rgba(196, 92, 38, 0.18);
+    --stat-glow: rgba(242, 116, 58, 0.24);
   }
 
   .stat-value {
