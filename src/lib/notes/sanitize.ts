@@ -43,7 +43,11 @@ const ALLOWED_STYLE_PROPERTIES = [
   "font-weight",
   "font-style",
   "text-decoration",
+  "margin-left",
 ] as const;
+
+/** 允许携带 style 的标签；其余标签不带任何属性。 */
+const STYLE_HOST_TAGS = new Set(["SPAN", "P", "DIV", "LI"]);
 
 type AllowedStyleProperty = (typeof ALLOWED_STYLE_PROPERTIES)[number];
 
@@ -54,6 +58,7 @@ const STYLE_VALUE_PATTERNS: Record<AllowedStyleProperty, RegExp> = {
   "font-weight": /^(?:normal|bold|bolder|lighter|[1-9]00)$/i,
   "font-style": /^(?:normal|italic|oblique)$/i,
   "text-decoration": /^[a-z-]+(?:\s+[a-z-]+)*$/i,
+  "margin-left": /^\d+(?:\.\d+)?(?:px|em|rem)$/i,
 };
 
 function sanitizeStyle(raw: string | null, doc: Document): string {
@@ -94,17 +99,17 @@ function cleanChildren(source: Node, target: Node, doc: Document): void {
       continue;
     }
 
-    if (tag === "SPAN") {
+    if (STYLE_HOST_TAGS.has(tag)) {
       const style = sanitizeStyle(element.getAttribute("style"), doc);
       // 没有任何允许样式的 span 直接拆掉，减少无意义嵌套。
-      if (!style) {
+      if (tag === "SPAN" && !style) {
         cleanChildren(element, target, doc);
         continue;
       }
-      const span = doc.createElement("span");
-      span.setAttribute("style", style);
-      target.appendChild(span);
-      cleanChildren(element, span, doc);
+      const clone = doc.createElement(tag.toLowerCase());
+      if (style) clone.setAttribute("style", style);
+      target.appendChild(clone);
+      cleanChildren(element, clone, doc);
       continue;
     }
 

@@ -272,6 +272,43 @@ export default function NotesPage() {
     rememberSelection();
   }
 
+  /** 每级缩进像素；Tab 加一级，Shift/Ctrl+Tab 减一级 */
+  const INDENT_STEP = 24;
+
+  /**
+   * 调整选区覆盖的块级段落的左缩进（用 margin-left，可被 sanitize 保留）。
+   * 纯文本（没有块级元素）时，Tab 退化为插入空格。
+   */
+  function changeIndent(delta: number) {
+    const editor = editorRef.current;
+    if (!editor) return;
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!editor.contains(range.commonAncestorContainer)) return;
+
+    const candidates = Array.from(editor.querySelectorAll<HTMLElement>("p, div, li")).filter(
+      (el) => range.intersectsNode(el),
+    );
+    // 只保留最外层块，避免嵌套 div 被重复缩进
+    const blocks = candidates.filter(
+      (el) => !candidates.some((other) => other !== el && other.contains(el)),
+    );
+
+    if (blocks.length === 0) {
+      if (delta > 0) document.execCommand("insertText", false, "    ");
+      return;
+    }
+
+    for (const el of blocks) {
+      const current = Number.parseFloat(el.style.marginLeft) || 0;
+      const next = Math.max(0, Math.min(240, current + delta));
+      if (next === 0) el.style.removeProperty("margin-left");
+      else el.style.marginLeft = `${next}px`;
+    }
+    rememberSelection();
+  }
+
   const message = error ? (
     <p className="shrink-0 text-xs text-[var(--danger)]">{error}</p>
   ) : notice ? (
@@ -642,6 +679,12 @@ export default function NotesPage() {
               onKeyUp={rememberSelection}
               onPaste={handlePaste}
               onKeyDown={(e) => {
+                if (e.key === "Tab") {
+                  // Tab 缩进；Shift+Tab / Ctrl+Tab 反向缩进
+                  e.preventDefault();
+                  changeIndent(e.shiftKey || e.ctrlKey || e.metaKey ? -INDENT_STEP : INDENT_STEP);
+                  return;
+                }
                 if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                   e.preventDefault();
                   void save();
