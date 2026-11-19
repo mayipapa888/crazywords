@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { MicGate } from "@/components/MicGate";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
 import { extractChineseFromTranscript, segmentChinese } from "@/lib/speech/extract-meaning";
 import { playFailChime, playSuccessChime } from "@/lib/speech/play-sfx";
@@ -384,7 +383,27 @@ export default function DictationPage() {
     [playAnswerOnce, stopAnswerSpeech],
   );
 
+  /** 主动申请麦克风权限：点击模式按钮或开始听写时调用，拿到后立即释放，录音时再开 */
+  const requestMic = useCallback(async (): Promise<boolean> => {
+    if (micOk) return true;
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setError("当前环境无法访问麦克风（需 HTTPS 或 localhost），请改用 localhost 访问。");
+        return false;
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+      setMicOk(true);
+      setError(null);
+      return true;
+    } catch {
+      setError("麦克风权限未授予：请在浏览器地址栏允许麦克风后重试。");
+      return false;
+    }
+  }, [micOk]);
+
   async function startSession() {
+    void requestMic();
     setBusy(true);
     setError(null);
     setFeedback(null);
@@ -766,15 +785,6 @@ export default function DictationPage() {
     };
   }, [clearTimers, stopAsr, stopAnswerSpeech, stopTtsSpeech]);
 
-  if (!micOk) {
-    return (
-      <div className="space-y-4">
-        <h1 className="font-display text-3xl">听写</h1>
-        <MicGate onGranted={() => setMicOk(true)} />
-      </div>
-    );
-  }
-
   if (!sessionId) {
     return (
       <div className="flex h-full w-full flex-col gap-2">
@@ -792,7 +802,7 @@ export default function DictationPage() {
                   ? "border-[var(--accent)] bg-[var(--accent-soft)]"
                   : "border-[var(--line)] hover:border-[var(--accent)]"
               }`}
-              onClick={() => setSelectedMode("gloss")}
+              onClick={() => { setSelectedMode("gloss"); void requestMic(); }}
             >
               <span className="font-display block text-base">模式 A</span>
               <span className="text-xs text-[var(--muted)]">中文 → 拼写朗读</span>
@@ -804,7 +814,7 @@ export default function DictationPage() {
                   ? "border-[var(--accent)] bg-[var(--accent-soft)]"
                   : "border-[var(--line)] hover:border-[var(--accent)]"
               }`}
-              onClick={() => setSelectedMode("meaning")}
+              onClick={() => { setSelectedMode("meaning"); void requestMic(); }}
             >
               <span className="font-display block text-base">模式 B</span>
               <span className="text-xs text-[var(--muted)]">单词 → 说中文</span>

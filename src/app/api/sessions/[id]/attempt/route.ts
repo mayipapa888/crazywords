@@ -158,13 +158,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         null;
       spellingOk = checkSpelling(extractedSpelling || spellingInput, entry.word);
       pronunciationOk = checkPronunciation(asrTranscript, entry.word);
-      overallOk = spellingOk && pronunciationOk;
-      wrongKinds =
-        !spellingOk && !pronunciationOk
-          ? "both"
-          : !spellingOk
-            ? "spelling"
-            : "pronunciation";
+      // 语音识别本身不够准：拼写正确即算通过，发音识别误差不再判错
+      overallOk = spellingOk;
+      wrongKinds = !spellingOk && !pronunciationOk ? "both" : !spellingOk ? "spelling" : "pronunciation";
     }
 
     const attempt = await prisma.attempt.create({
