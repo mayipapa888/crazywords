@@ -56,6 +56,35 @@ function emptyBuild(date: string, goalN: number): QueueBuild {
   return { date, goalN, items: [], reviewDay: false, tomorrowDueCount: 0 };
 }
 
+/** 亚洲/上海时区当天 0 点对应的 UTC 时刻（无夏令时，固定 +8） */
+function shanghaiDayStart(now: Date): Date {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(now);
+  const pick = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return new Date(Date.UTC(pick("year"), pick("month") - 1, pick("day")) - 8 * 3600_000);
+}
+
+/**
+ * 今天已经答对过的词条 id 集合。
+ * 规则：只要当天有一次听写判定为正确，该词当天就不再出现。
+ */
+async function entriesAnsweredCorrectToday(userId: string, now = new Date()): Promise<Set<string>> {
+  const rows = await prisma.attempt.findMany({
+    where: {
+      session: { userId },
+      overallOk: true,
+      createdAt: { gte: shanghaiDayStart(now) },
+    },
+    select: { entryId: true },
+    distinct: ["entryId"],
+  });
+  return new Set(rows.map((r) => r.entryId));
+}
+
 /**
  * 今日队列：到期复习 → 活跃错词（≤40% N）→ 新词补齐 N。
  * 逾期 ≥ N → 复习日，不抽新词。
@@ -82,7 +111,11 @@ export async function buildTodayQueue(
   const entries = await prisma.wordEntry.findMany({
     where: { listId: { in: listIds } },
   });
-  const dictatable = entries.filter((e) => canDictate(e, meaningEnabled));
+  // 今天已答对过的词不再进队列
+  const doneToday = await entriesAnsweredCorrectToday(userId, now);
+  const dictatable = entries
+    .filter((e) => canDictate(e, meaningEnabled))
+    .filter((e) => !doneToday.has(e.id));
   const byId = new Map(dictatable.map((e) => [e.id, e]));
 
   const cards = await prisma.cardState.findMany({ where: { userId } });
@@ -186,7 +219,11 @@ export async function buildRandomQueue(
   const entries = await prisma.wordEntry.findMany({
     where: { listId: { in: listIds } },
   });
-  const dictatable = entries.filter((e) => canDictate(e, clozeEnabled));
+  // 今天已答对过的词不再进队列
+  const doneToday = await entriesAnsweredCorrectToday(userId);
+  const dictatable = entries
+    .filter((e) => canDictate(e, clozeEnabled))
+    .filter((e) => !doneToday.has(e.id));
 
   // Fisher–Yates 洗牌，避免依赖数据库随机排序（SQLite / Postgres 语法不同）。
   for (let i = dictatable.length - 1; i > 0; i -= 1) {
