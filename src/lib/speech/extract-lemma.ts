@@ -10,6 +10,23 @@ function tokenize(text: string): string[] {
     .filter((t) => /^[a-z][a-z'-]*$/i.test(t));
 }
 
+/** 逐字母拼写的分隔符：空白、连字符（- – —）、逗号/句点/顿号/项目符号等 */
+const LETTER_SPELLING_SEPARATORS = /[\s\-–—,.;:!?、•·。；：！？…]+/;
+
+/** 按分隔符把转录切成字母片段，去掉空片段 */
+function splitLetterSegments(transcript: string): string[] {
+  return toHalfWidth(transcript)
+    .split(LETTER_SPELLING_SEPARATORS)
+    .filter((part) => part.length > 0);
+}
+
+/** 比较键：全角转半角、小写、去掉空格与连字符（ice cream / ice-cream → icecream） */
+function spellingKey(text: string): string {
+  return toHalfWidth(text)
+    .toLowerCase()
+    .replace(/[\s\-–—]+/g, "");
+}
+
 /**
  * 多词短语匹配：按顺序在转写 token 里逐词查找，允许目标词之间夹入
  * 额外界词 / 标点（如转写「leave it out」也能命中「leave out」）。
@@ -35,6 +52,25 @@ function matchesPhrase(targetTokens: string[], tokens: string[]): boolean {
 export function extractLemmaFromTranscript(transcript: string, targetWord?: string): string {
   const raw = (transcript || "").trim();
   if (!raw) return "";
+
+  // 字母逐个拼写（a-p-p-l-e / ａ ｐ ｐ ｌ ｅ）：优先级最高，先于整词 / 短语匹配。
+  // 全部片段都是单个字母且至少 2 个，才拼接成一个候选词。
+  const letterSegments = splitLetterSegments(raw);
+  if (
+    letterSegments.length >= 2 &&
+    letterSegments.every((segment) => /^[a-z]$/i.test(segment))
+  ) {
+    const spelled = letterSegments.join("");
+    if (targetWord) {
+      const target = toHalfWidth(targetWord).trim().replace(/\s+/g, " ");
+      // 忽略大小写，也忽略目标词内的空格与连字符（ice cream → i c e c r e a m）
+      if (spelled.toLowerCase() === spellingKey(target)) {
+        return target;
+      }
+    }
+    // 与目标不一致：返回实际拼出的内容，交给判定逻辑判错
+    return spelled.toLowerCase();
+  }
 
   const tokens = tokenize(raw);
   if (tokens.length === 0) return "";

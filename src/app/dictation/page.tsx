@@ -179,6 +179,10 @@ export default function DictationPage() {
   const [settingsHint, setSettingsHint] = useState<string | null>(null);
   /** 当前会话实际使用的范围（切换范围后只有重开才更新） */
   const [sessionSource, setSessionSource] = useState<QueueSource>("today");
+  /** 手动输入态：聚焦作答输入框后停录，不自动开录、不自动判定 */
+  const [manualTyping, setManualTyping] = useState(false);
+  /** 作答区「看提示」是否展开（展示正解，不影响继续作答） */
+  const [hintOpen, setHintOpen] = useState(false);
 
   const asrRef = useRef<RealtimeAsrSession | null>(null);
   /** 进入页面自动申请麦克风，只申请一次（React 严格模式双执行也不会重复弹窗） */
@@ -190,6 +194,8 @@ export default function DictationPage() {
   const meaningRef = useRef("");
   /** 本题是否已手写输入：手写优先，ASR 结果不再覆盖输入框 */
   const manualInputRef = useRef(false);
+  /** manualTyping 的同步镜像：计时器 / 异步回调里读取，避免闭包读到旧值 */
+  const manualTypingRef = useRef(false);
   const startRealtimeRef = useRef<() => Promise<void>>(async () => undefined);
   const submitAttemptRef = useRef<(transcriptOverride?: string) => Promise<void>>(
     async () => undefined,
@@ -431,6 +437,9 @@ export default function DictationPage() {
     spellingRef.current = "";
     meaningRef.current = "";
     manualInputRef.current = false;
+    manualTypingRef.current = false;
+    setManualTyping(false);
+    setHintOpen(false);
     setPhase("idle");
     try {
       const [meRes, sessRes] = await Promise.all([
@@ -497,6 +506,9 @@ export default function DictationPage() {
     spellingRef.current = "";
     meaningRef.current = "";
     manualInputRef.current = false;
+    manualTypingRef.current = false;
+    setManualTyping(false);
+    setHintOpen(false);
     setPhase("idle");
     setIndex((prev) => {
       const next = prev + 1;
@@ -518,6 +530,9 @@ export default function DictationPage() {
       setBusy(true);
       setError(null);
       clearTimers();
+      // 已提交：退出手动输入态，恢复自动流程的初始状态
+      manualTypingRef.current = false;
+      setManualTyping(false);
       try {
         const live =
           transcriptOverride ??
@@ -602,6 +617,12 @@ export default function DictationPage() {
 
   const startRealtime = useCallback(async () => {
     if (!current || recording || feedback || startingAsrRef.current) return;
+    // 手动输入态下绝不自动开录；用户点「开始录音」时会先清掉该状态
+    if (manualTypingRef.current) {
+      setPhase("wait-record");
+      setCountdown(null);
+      return;
+    }
     startingAsrRef.current = true;
     clearTimers();
     setError(null);
@@ -621,6 +642,8 @@ export default function DictationPage() {
       silenceTimer.current = setTimeout(() => {
         silenceTimer.current = null;
         if (asrGen.current !== gen) return;
+        // 手动输入中不累计静音自动判定
+        if (manualTypingRef.current) return;
         void submitAttemptRef.current();
       }, SILENCE_AFTER_SPEECH_MS);
     };
@@ -697,6 +720,7 @@ export default function DictationPage() {
       autoSubmitTimer.current = setTimeout(() => {
         autoSubmitTimer.current = null;
         if (asrGen.current !== gen) return;
+        if (manualTypingRef.current) return;
         if (!speechSeenRef.current) {
           setCountdown("等待语音：请开口，或点「结束并判定」");
           return;
@@ -719,6 +743,9 @@ export default function DictationPage() {
   /** 等待阶段（含 tts 播报中）点「开始录音」：立即停掉播报并开录 */
   const manualStartRecording = useCallback(() => {
     if (!current || recording || feedback) return;
+    // 显式点「开始录音」：退出手动输入态，恢复自动流程
+    manualTypingRef.current = false;
+    setManualTyping(false);
     clearTimers();
     // 作废尚未结束的 TTS 后续流程，避免播报结束后再触发一次自动开录
     wordGen.current += 1;
@@ -738,11 +765,21 @@ export default function DictationPage() {
       // 麦克风权限已在点模式/开始听写时申请过，这里通常不会再弹窗。
       void item;
       setPhase("wait-record");
+      // 用户已在输入框手动作答：不安排自动开录，保持等待
+      if (manualTypingRef.current) {
+        setCountdown(null);
+        return;
+      }
       setCountdown(immediate ? "正在开始录音…" : "即将自动录音…");
       if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
       autoStartTimer.current = setTimeout(
         () => {
           autoStartTimer.current = null;
+          if (manualTypingRef.current) {
+            setPhase("wait-record");
+            setCountdown(null);
+            return;
+          }
           void startRealtimeRef.current();
         },
         immediate ? 0 : 450,
@@ -764,6 +801,9 @@ export default function DictationPage() {
     setMeaningText("");
     meaningRef.current = "";
     manualInputRef.current = false;
+    manualTypingRef.current = false;
+    setManualTyping(false);
+    setHintOpen(false);
     setError(null);
     submitLock.current = false;
     setPhase("tts");
@@ -800,6 +840,9 @@ export default function DictationPage() {
     setMeaningText("");
     meaningRef.current = "";
     manualInputRef.current = false;
+    manualTypingRef.current = false;
+    setManualTyping(false);
+    setHintOpen(false);
     submitLock.current = false;
     setPhase("tts");
     setCountdown("正在播报…");
@@ -839,6 +882,9 @@ export default function DictationPage() {
     spellingRef.current = "";
     meaningRef.current = "";
     manualInputRef.current = false;
+    manualTypingRef.current = false;
+    setManualTyping(false);
+    setHintOpen(false);
     setFeedback(null);
     setTtsNote(null);
     setPhase("idle");
@@ -1069,11 +1115,13 @@ export default function DictationPage() {
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {!feedback && (
             <span className="text-xs text-[var(--muted)]">
-              {phase === "tts"
-                ? "播报结束后自动开录"
-                : recording
-                  ? "录音中，静音 3 秒自动判定"
-                  : "等待开录"}
+              {manualTyping
+                ? "手动输入中，回车判定"
+                : phase === "tts"
+                  ? "播报结束后自动开录"
+                  : recording
+                    ? "录音中，静音 3 秒自动判定"
+                    : "等待开录"}
             </span>
           )}
           {!feedback && !recording && !busy && (phase === "tts" || phase === "wait-record") && (
@@ -1132,6 +1180,14 @@ export default function DictationPage() {
                     mode === "gloss" ? "也可以直接输入拼写" : "也可以直接输入中文释义"
                   }
                   value={mode === "gloss" ? spelling : meaningText}
+                  onFocus={() => {
+                    // 聚焦作答输入框：立刻停录并进入手动输入态，不自动开录、不自动判定
+                    manualTypingRef.current = true;
+                    setManualTyping(true);
+                    void stopAsr();
+                    clearTimers();
+                    setPhase((prev) => (prev === "recording" ? "wait-record" : prev));
+                  }}
                   onChange={(e) => {
                     const value = e.target.value;
                     manualInputRef.current = true;
@@ -1144,8 +1200,16 @@ export default function DictationPage() {
                     }
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") {
+                    // 输入法组合期间（拼音选词）的回车 / 空格交给输入法，不提交
+                    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+                      return;
+                    }
+                    // 目标词含空格（短语）时空格照常输入，避免无法输入空格
+                    const spaceSubmits = e.key === " " && !/\s/.test(current.word);
+                    if (e.key === "Enter" || spaceSubmits) {
                       e.preventDefault();
+                      // 清掉静音 3 秒与自动判定计时器，避免与手动提交重复
+                      clearTimers();
                       void submitAttemptRef.current();
                     }
                   }}
@@ -1164,7 +1228,38 @@ export default function DictationPage() {
                 >
                   判定
                 </button>
+                <button
+                  type="button"
+                  className="btn-secondary shrink-0 px-2 py-1 text-xs"
+                  aria-expanded={hintOpen}
+                  onClick={() => setHintOpen((prev) => !prev)}
+                >
+                  {hintOpen ? "收起提示" : "看提示"}
+                </button>
               </div>
+              {hintOpen && (
+                <div className="rounded-md border border-[var(--line)] bg-[var(--chip)]/60 px-2 py-1.5 text-xs leading-snug">
+                  <p>
+                    <span className="rounded bg-[var(--accent-soft)] px-1 py-0.5 text-[var(--accent)]">
+                      正解
+                    </span>
+                    <span className="ml-1.5 font-display text-sm text-[var(--ink)]">
+                      {current.word}
+                    </span>
+                    <span className="ml-1.5 text-[var(--muted)]">
+                      {current.pos || "—"}
+                    </span>
+                    <span className="ml-1.5 text-[var(--ink)]">
+                      {current.glossZh || "—"}
+                    </span>
+                  </p>
+                  {current.example && (
+                    <p className="mt-0.5 break-words text-[var(--muted)]">
+                      例：{current.example}
+                    </p>
+                  )}
+                </div>
+              )}
               {error && (
                 <p className="rounded-md bg-[var(--danger-soft)] px-2 py-1 text-xs text-[var(--danger)]">
                   {error}
