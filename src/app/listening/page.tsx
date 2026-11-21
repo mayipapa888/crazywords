@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LISTENING_MATERIALS,
   bilibiliEmbedUrl,
@@ -12,6 +12,46 @@ import {
 /** 上报间隔：每 30 秒累计一次 30 秒收听时长 */
 const TICK_MS = 30_000;
 const STEP_SECONDS = 30;
+/** 播放位置累计间隔与落盘间隔 */
+const POS_TICK_MS = 5_000;
+const POS_SAVE_MS = 15_000;
+const LAST_KEY = "cw:listening:last";
+
+type LastState = {
+  bvid: string;
+  page: number;
+  posSeconds: number;
+  updatedAt: string;
+};
+
+function readLast(): LastState | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(LAST_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<LastState>;
+    if (typeof parsed.page !== "number" || !Number.isFinite(parsed.page)) return null;
+    return {
+      bvid: typeof parsed.bvid === "string" ? parsed.bvid : "",
+      page: Math.max(1, Math.floor(parsed.page)),
+      posSeconds:
+        typeof parsed.posSeconds === "number" && parsed.posSeconds > 0
+          ? Math.floor(parsed.posSeconds)
+          : 0,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : "",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeLast(state: LastState) {
+  try {
+    window.localStorage.setItem(LAST_KEY, JSON.stringify(state));
+  } catch {
+    // 隐私模式/配额满时忽略，不影响播放
+  }
+}
 
 function todayLabel(date = new Date()): string {
   return `${date.getMonth() + 1} 月 ${date.getDate()} 日`;
@@ -25,16 +65,48 @@ function formatListening(totalSeconds: number): string {
   return seconds === 0 ? `${minutes} 分` : `${minutes} 分 ${seconds} 秒`;
 }
 
+/** 12:30 形式的时间点 */
+function formatClock(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 export default function ListeningPage() {
   const daily = useMemo(() => pickDailyMaterial(), []);
   const suggestedPart = useMemo(() => pickDailyPart(daily.pages), [daily.pages]);
-  const [part, setPart] = useState(suggestedPart);
   const material = LISTENING_MATERIALS[0] ?? daily;
+
+  const [part, setPart] = useState(() => Math.min(suggestedPart, material.pages));
+  /** 仅在首次恢复上次进度时非 0，作为播放器起播秒数 */
+  const [startAt, setStartAt] = useState(0);
+  /** 恢复出的上次位置，用于顶部提示 */
+  const [resumeNote, setResumeNote] = useState<string | null>(null);
+  const posRef = useRef(0);
+  const restoredRef = useRef(false);
 
   /** 今日已听秒数；null 表示尚未取到 */
   const [todaySeconds, setTodaySeconds] = useState<number | null>(null);
   /** 同一时刻只允许一次上报，避免网络慢时请求堆积 */
   const inFlightRef = useRef(false);
+
+  // 进入页面：恢复上次的集数与播放位置
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const last = readLast();
+    if (!last) return;
+    if (last.bvid && last.bvid !== material.bvid) return;
+    const page = Math.min(Math.max(1, last.page), material.pages);
+    setPart(page);
+    posRef.current = last.posSeconds;
+    if (last.posSeconds > 0) {
+      setStartAt(last.posSeconds);
+      setResumeNote(`上次听到第 ${page} 集 ${formatClock(last.posSeconds)}`);
+    } else {
+      setResumeNote(`上次听到第 ${page} 集`);
+    }
+  }, [material.bvid, material.pages]);
 
   // 进入页面先取一次今日累计
   useEffect(() => {
@@ -101,14 +173,53 @@ export default function ListeningPage() {
     };
   }, []);
 
-  function go(delta: number) {
-    setPart((current) => {
-      const next = current + delta;
-      if (next < 1) return material.pages;
-      if (next > material.pages) return 1;
-      return next;
+  /** 把当前集数与位置落盘 */
+  const persist = useCallback(() => {
+    writeLast({
+      bvid: material.bvid,
+      page: part,
+      posSeconds: posRef.current,
+      updatedAt: new Date().toISOString(),
     });
+  }, [material.bvid, part]);
+
+  // 播放位置：可见时按 5 秒累计（跨域拿不到 iframe 真实进度，用停留时长近似）
+  useEffect(() => {
+    const tick = window.setInterval(() => {
+      if (document.visibilityState === "visible") posRef.current += POS_TICK_MS / 1000;
+    }, POS_TICK_MS);
+    const saveTimer = window.setInterval(persist, POS_SAVE_MS);
+
+    const onHide = () => persist();
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", onHide);
+
+    return () => {
+      window.clearInterval(tick);
+      window.clearInterval(saveTimer);
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", onHide);
+      persist();
+    };
+  }, [persist]);
+
+  /** 手动切集：位置清零，不再沿用上次起播点 */
+  const changePart = useCallback((next: number) => {
+    posRef.current = 0;
+    setStartAt(0);
+    setResumeNote(null);
+    setPart(next);
+  }, []);
+
+  function go(delta: number) {
+    const next = part + delta;
+    if (next < 1) changePart(material.pages);
+    else if (next > material.pages) changePart(1);
+    else changePart(next);
   }
+
+  const embedSrc =
+    bilibiliEmbedUrl(material.bvid, part) + (startAt > 0 ? `&t=${startAt}` : "");
 
   return (
     <div className="flex h-full flex-col gap-2">
@@ -116,7 +227,9 @@ export default function ListeningPage() {
         <div className="min-w-0">
           <h1 className="font-display text-xl">
             磨耳朵
-            <span className="badge ml-2 align-middle">{todayLabel()} 推荐第 {suggestedPart} 集</span>
+            <span className="badge ml-2 align-middle">
+              {todayLabel()} 推荐第 {suggestedPart} 集
+            </span>
           </h1>
           <p className="truncate text-xs text-[var(--muted)]">
             每天一集初中听力 9000 句 · B 站官方播放器内嵌，版权归原作者
@@ -143,6 +256,7 @@ export default function ListeningPage() {
       <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--line)] px-3 py-2">
           <h2 className="min-w-0 flex-1 truncate text-sm font-bold">{material.title}</h2>
+          {resumeNote && <span className="badge shrink-0">{resumeNote}</span>}
           <span
             className="badge shrink-0"
             title="本页可见时每 30 秒累计一次；切到后台自动暂停"
@@ -154,7 +268,7 @@ export default function ListeningPage() {
             第
             <select
               value={part}
-              onChange={(event) => setPart(Number(event.target.value))}
+              onChange={(event) => changePart(Number(event.target.value))}
               className="rounded border border-[var(--line)] bg-[var(--paper)] px-1 py-0.5 text-xs text-[var(--ink)]"
               aria-label="选择集数"
             >
@@ -175,8 +289,8 @@ export default function ListeningPage() {
 
         <div className="relative min-h-0 flex-1 bg-black">
           <iframe
-            key={`${material.bvid}-${part}`}
-            src={bilibiliEmbedUrl(material.bvid, part)}
+            key={`${material.bvid}-${part}-${startAt}`}
+            src={embedSrc}
             title={`${material.title} 第 ${part} 集`}
             className="h-full w-full"
             allow="autoplay; fullscreen; picture-in-picture"
