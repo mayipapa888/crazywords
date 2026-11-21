@@ -217,6 +217,8 @@ export default function DictationPage() {
   /** window 键盘监听里调用最新的「开始听写 / 结束并判定」，避免闭包绑定旧函数 */
   const startSessionRef = useRef<() => void>(() => undefined);
   const endRecordingRef = useRef<() => void>(() => undefined);
+  const nextWordRef = useRef<() => void>(() => undefined);
+  const retryWordRef = useRef<() => void>(() => undefined);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -245,8 +247,8 @@ export default function DictationPage() {
     : selectedMode;
 
   /** 键盘监听读取的最新状态快照：每次渲染同步，回调里不会拿到旧值 */
-  const latestRef = useRef({ sessionId, recording, feedback, busy });
-  latestRef.current = { sessionId, recording, feedback, busy };
+  const latestRef = useRef({ sessionId, recording, feedback, busy, index, total: items.length });
+  latestRef.current = { sessionId, recording, feedback, busy, index, total: items.length };
 
   const clearTimers = useCallback(() => {
     if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
@@ -830,9 +832,11 @@ export default function DictationPage() {
       if (event.repeat) return;
       if (event.isComposing || event.keyCode === 229) return;
       if (event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
-        return;
-      }
+
+      const isConfirmKey =
+        event.key === "Enter" || event.key === " " || event.key === "Spacebar";
+      const isNextKey = event.key === "ArrowRight";
+      if (!isConfirmKey && !isNextKey) return;
       if (isEditableTarget(event.target)) return;
 
       // 通过 ref 读取最新状态，避免监听闭包停留在首次渲染的旧值
@@ -844,15 +848,33 @@ export default function DictationPage() {
       } = latestRef.current;
 
       if (!latestSessionId) {
-        if (latestBusy) return;
+        if (!isConfirmKey || latestBusy) return;
         event.preventDefault();
         startSessionRef.current();
         return;
       }
-      // 只在真正拾音时结束判定：播报中 / 已出反馈 / 本轮完成都不响应
-      if (latestRecording && !latestFeedback && !latestBusy) {
+
+      // 已出反馈：→ 下一个单词，空格/回车 重试本词
+      if (latestFeedback) {
+        if (latestBusy) return;
+        event.preventDefault();
+        if (isNextKey) nextWordRef.current();
+        else retryWordRef.current();
+        return;
+      }
+
+      // 录音中：空格/回车 结束并判定；→ 不打断录音，避免误触
+      if (latestRecording) {
+        if (!isConfirmKey || latestBusy) return;
         event.preventDefault();
         endRecordingRef.current();
+        return;
+      }
+
+      // 其余等待状态：→ 跳过当前词
+      if (isNextKey && !latestBusy) {
+        event.preventDefault();
+        nextWordRef.current();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -953,6 +975,12 @@ export default function DictationPage() {
       beginTimersAfterTts(current, true);
     })();
   }, [current, clearTimers, speakEntry, beginTimersAfterTts, stopAnswerSpeech]);
+
+  // 全局快捷键通过 ref 派发，保证拿到最新闭包
+  useEffect(() => {
+    nextWordRef.current = nextWord;
+    retryWordRef.current = retryCurrent;
+  });
 
   useEffect(() => {
     return () => {
