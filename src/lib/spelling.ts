@@ -16,14 +16,19 @@ export function toHalfWidth(input: string): string {
     .replace(/[‘’]/g, "'");
 }
 
-/** 拼写判定：忽略大小写、trim、去目标无标点时的用户标点。 */
+/** 拼写判定：忽略大小写、trim、去目标无标点时的用户标点；单词目标还会合并中间空格。 */
 export function normalizeSpelling(input: string, target: string): string {
   const s = toHalfWidth(input).trim();
-  const targetHasPunct = /[^\w\s'-]/.test(toHalfWidth(target));
-  if (!targetHasPunct) {
-    return s.replace(/[^\w\s'-]/g, "").toLowerCase();
+  const normalizedTarget = toHalfWidth(target).trim();
+  const targetHasPunct = /[^\w\s'-]/.test(normalizedTarget);
+  const base = targetHasPunct
+    ? s.toLowerCase()
+    : s.replace(/[^\w\s'-]/g, "").toLowerCase();
+  // 目标词是单个词时，把识别结果里字母之间的空格去掉（a p p l e → apple）。
+  if (!/\s/.test(normalizedTarget)) {
+    return base.replace(/\s+/g, "");
   }
-  return s.toLowerCase();
+  return base;
 }
 
 export function checkSpelling(input: string, targetWord: string): boolean {
@@ -53,7 +58,14 @@ export function checkPronunciation(transcript: string | null | undefined, target
   const said = tokenize(transcript);
   const target = tokenize(targetWord);
   if (target.length === 0 || said.length === 0) return false;
-  if (target.length === 1) return said[0] === target[0];
+  if (target.length === 1) {
+    if (said[0] === target[0]) return true;
+    // 逐字母念（a p p l e）时把单字母 token 拼起来再比
+    if (said.length >= 2 && said.every((token) => /^[a-z]$/i.test(token))) {
+      return said.join("") === target[0];
+    }
+    return false;
+  }
 
   let cursor = 0;
   for (const token of said) {

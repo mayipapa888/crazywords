@@ -20,12 +20,6 @@ function splitLetterSegments(transcript: string): string[] {
     .filter((part) => part.length > 0);
 }
 
-/** 比较键：全角转半角、小写、去掉空格与连字符（ice cream / ice-cream → icecream） */
-function spellingKey(text: string): string {
-  return toHalfWidth(text)
-    .toLowerCase()
-    .replace(/[\s\-–—]+/g, "");
-}
 
 /**
  * 多词短语匹配：按顺序在转写 token 里逐词查找，允许目标词之间夹入
@@ -53,23 +47,35 @@ export function extractLemmaFromTranscript(transcript: string, targetWord?: stri
   const raw = (transcript || "").trim();
   if (!raw) return "";
 
-  // 字母逐个拼写（a-p-p-l-e / ａ ｐ ｐ ｌ ｅ）：优先级最高，先于整词 / 短语匹配。
-  // 全部片段都是单个字母且至少 2 个，才拼接成一个候选词。
+  // 字母逐个拼写（a-p-p-l-e / ａ ｐ ｐ ｌ ｅ / A. P. P. L. E.）：优先级最高，先于整词 / 短语匹配。
+  // 统一做法：把转录里所有非字母字符去掉，得到纯字母串再与目标词比较，
+  // 这样中间的空格、点号、连字符、顿号等分隔符都能被合并掉。
+  if (targetWord) {
+    const target = toHalfWidth(targetWord).trim().replace(/\s+/g, " ");
+    const lettersOnly = toHalfWidth(raw).replace(/[^a-zA-Z]/g, "").toLowerCase();
+    const targetLetters = target.replace(/[^a-zA-Z]/g, "").toLowerCase();
+    if (lettersOnly.length >= 2 && lettersOnly === targetLetters) {
+      return target;
+    }
+  }
+
+  // 混合噪声时（如 "a p p l e um"）：只要其中的单字母片段连起来能拼出目标词，也算命中。
   const letterSegments = splitLetterSegments(raw);
+  const singleLetters = letterSegments.filter((segment) => /^[a-z]$/i.test(segment));
+  if (targetWord && singleLetters.length >= 2) {
+    const spelled = singleLetters.join("").toLowerCase();
+    const targetLetters = toHalfWidth(targetWord).replace(/[^a-zA-Z]/g, "").toLowerCase();
+    if (spelled === targetLetters) {
+      return toHalfWidth(targetWord).trim().replace(/\s+/g, " ");
+    }
+  }
+
+  // 全都由单字母片段组成时（且与目标不匹配），拼接后交给判定逻辑判错。
   if (
     letterSegments.length >= 2 &&
     letterSegments.every((segment) => /^[a-z]$/i.test(segment))
   ) {
-    const spelled = letterSegments.join("");
-    if (targetWord) {
-      const target = toHalfWidth(targetWord).trim().replace(/\s+/g, " ");
-      // 忽略大小写，也忽略目标词内的空格与连字符（ice cream → i c e c r e a m）
-      if (spelled.toLowerCase() === spellingKey(target)) {
-        return target;
-      }
-    }
-    // 与目标不一致：返回实际拼出的内容，交给判定逻辑判错
-    return spelled.toLowerCase();
+    return letterSegments.join("").toLowerCase();
   }
 
   const tokens = tokenize(raw);
