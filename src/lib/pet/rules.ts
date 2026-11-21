@@ -26,7 +26,7 @@ export const TICKET_MILESTONE_EXP = 100;
 /** 喂食：每次消耗的积分 */
 export const FEED_POINTS_COST = 20;
 /** 喂食：每次获得的 EXP */
-export const FEED_EXP = 30;
+export const FEED_EXP = 10;
 /** 喂食：每天最多次数 */
 export const FEED_DAILY_CAP = 3;
 
