@@ -13,6 +13,7 @@ const NAV = [
   { href: "/notes", label: "知识点" },
   { href: "/words", label: "词库维护" },
   { href: "/calendar", label: "打卡" },
+  { href: "/pet", label: "宠物" },
   { href: "/settings", label: "设置" },
 ];
 

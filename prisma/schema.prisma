@@ -30,6 +30,7 @@ model User {
   sessions       Session[]
   notes          KnowledgeNote[]
   listeningLogs  ListeningLog[]
+  pet            Pet?
 }
 
 model WordList {
@@ -168,4 +169,20 @@ model KnowledgeNote {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+}
+
+/// 宠物养成：exp 为累计经验，stage 1..5；GET /api/pet 时惰性结算当日经验
+model Pet {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  name         String   @default("小星")
+  stage        Int      @default(1) // 1..5
+  exp          Int      @default(0) // 累计经验
+  tickets      Int      @default(0) // 吃鸡券
+  lastExpDate  String   @default("") // 最近一次结算经验的 YYYY-MM-DD（Asia/Shanghai）
+  dailyExpJson String   @default("{}") // 当天各来源已获得的 EXP，如 {"dictation":12,"listening":3,...}
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
