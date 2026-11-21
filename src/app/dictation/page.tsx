@@ -128,6 +128,20 @@ function dictationTtsText(item: QueueItem): { text: string; lang: string } {
   return { text: gloss, lang: "zh-CN" };
 }
 
+/**
+ * 键盘快捷键的焦点守卫：输入框 / 文本域 / 下拉框 / 可编辑区域及其内部元素
+ * 有自己的回车、空格语义，交还给它们处理，避免重复触发。
+ */
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (target.isContentEditable) return true;
+  return Boolean(
+    target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]'),
+  );
+}
+
 /** 答错后的正解卡片：词性、音标、例句、词组、相近词一次给全 */
 function AnswerCard({ answer }: { answer: Feedback["answer"] }) {
   const rows: { label: string; value: string; wide?: boolean }[] = [
@@ -200,6 +214,9 @@ export default function DictationPage() {
   const submitAttemptRef = useRef<(transcriptOverride?: string) => Promise<void>>(
     async () => undefined,
   );
+  /** window 键盘监听里调用最新的「开始听写 / 结束并判定」，避免闭包绑定旧函数 */
+  const startSessionRef = useRef<() => void>(() => undefined);
+  const endRecordingRef = useRef<() => void>(() => undefined);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -226,6 +243,10 @@ export default function DictationPage() {
       ? "meaning"
       : "gloss"
     : selectedMode;
+
+  /** 键盘监听读取的最新状态快照：每次渲染同步，回调里不会拿到旧值 */
+  const latestRef = useRef({ sessionId, recording, feedback, busy });
+  latestRef.current = { sessionId, recording, feedback, busy };
 
   const clearTimers = useCallback(() => {
     if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
@@ -397,6 +418,28 @@ export default function DictationPage() {
     [playAnswerOnce, stopAnswerSpeech],
   );
 
+  /**
+   * 「看提示」：展开时复用答错播报逻辑自动朗读正解（释义×2 → 单词×2），
+   * 收起时立即停止朗读；切换提示前先掐断上一次播报，避免两段朗读叠加。
+   */
+  const toggleHint = useCallback(() => {
+    if (!current) return;
+    if (hintOpen) {
+      stopAnswerSpeech();
+      setHintOpen(false);
+      return;
+    }
+    stopAnswerSpeech();
+    setHintOpen(true);
+    void speakAnswer({
+      word: current.word,
+      glossZh: current.glossZh,
+      ipa: current.ipa,
+      pos: current.pos,
+      example: current.example,
+    });
+  }, [current, hintOpen, speakAnswer, stopAnswerSpeech]);
+
   /** 主动申请麦克风权限：点击模式按钮或开始听写时调用，拿到后立即释放，录音时再开 */
   const requestMic = useCallback(async (): Promise<boolean> => {
     if (micOk) return true;
@@ -530,6 +573,8 @@ export default function DictationPage() {
       setBusy(true);
       setError(null);
       clearTimers();
+      // 「看提示」的朗读可能还在进行：判定前先掐断，避免与答错播报叠在一起
+      stopAnswerSpeech();
       // 已提交：退出手动输入态，恢复自动流程的初始状态
       manualTypingRef.current = false;
       setManualTyping(false);
@@ -610,7 +655,17 @@ export default function DictationPage() {
         submitLock.current = false;
       }
     },
-    [sessionId, current, feedback, clearTimers, stopAsr, nextWord, speakAnswer, stopTtsSpeech],
+    [
+      sessionId,
+      current,
+      feedback,
+      clearTimers,
+      stopAsr,
+      nextWord,
+      speakAnswer,
+      stopAnswerSpeech,
+      stopTtsSpeech,
+    ],
   );
 
   submitAttemptRef.current = submitAttempt;
@@ -757,6 +812,51 @@ export default function DictationPage() {
   /** 录音中点「结束并判定」：submitAttempt 内部会 stopAsr 并走原有判定流程 */
   const endRecordingAndJudge = useCallback(() => {
     void submitAttemptRef.current();
+  }, []);
+
+  /** 供 window 键盘监听调用；每次渲染同步为最新实现（含最新 props/state 闭包） */
+  startSessionRef.current = startSession;
+  endRecordingRef.current = endRecordingAndJudge;
+
+  /**
+   * 全局回车 / 空格快捷键（只在两种状态生效，其它状态一律放行给浏览器）：
+   * - 未开始会话（sessionId 为空）：等同点「开始听写」→ startSession()
+   * - 录音中（recording）：等同点「结束并判定」→ endRecordingAndJudge()
+   * 跳过长按重复、中文输入法组合、输入框/可编辑区、以及 Ctrl/Meta/Alt 组合键。
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.repeat) return;
+      if (event.isComposing || event.keyCode === 229) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") {
+        return;
+      }
+      if (isEditableTarget(event.target)) return;
+
+      // 通过 ref 读取最新状态，避免监听闭包停留在首次渲染的旧值
+      const {
+        sessionId: latestSessionId,
+        recording: latestRecording,
+        feedback: latestFeedback,
+        busy: latestBusy,
+      } = latestRef.current;
+
+      if (!latestSessionId) {
+        if (latestBusy) return;
+        event.preventDefault();
+        startSessionRef.current();
+        return;
+      }
+      // 只在真正拾音时结束判定：播报中 / 已出反馈 / 本轮完成都不响应
+      if (latestRecording && !latestFeedback && !latestBusy) {
+        event.preventDefault();
+        endRecordingRef.current();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
   const beginTimersAfterTts = useCallback(
@@ -1232,7 +1332,7 @@ export default function DictationPage() {
                   type="button"
                   className="btn-secondary shrink-0 px-2 py-1 text-xs"
                   aria-expanded={hintOpen}
-                  onClick={() => setHintOpen((prev) => !prev)}
+                  onClick={toggleHint}
                 >
                   {hintOpen ? "收起提示" : "看提示"}
                 </button>
