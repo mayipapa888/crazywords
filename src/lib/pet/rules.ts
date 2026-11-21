@@ -17,11 +17,31 @@ export const NAME_MAX_LENGTH = 12;
 /** 最高阶段 */
 export const MAX_STAGE = 5;
 
-/** 吃鸡券上限 */
-export const MAX_TICKETS = 3;
+/** 吃鸡券上限（超出部分直接丢弃） */
+export const MAX_TICKETS = 20;
 
-/** 每次升阶发放的吃鸡券 */
-export const TICKETS_PER_STAGE_UP = 1;
+/** 每累计多少 EXP 发放 1 张吃鸡券 */
+export const TICKET_MILESTONE_EXP = 100;
+
+/** 喂食：每次消耗的积分 */
+export const FEED_POINTS_COST = 20;
+/** 喂食：每次获得的 EXP */
+export const FEED_EXP = 30;
+/** 喂食：每天最多次数 */
+export const FEED_DAILY_CAP = 3;
+
+/** 吃鸡战绩经验：吃鸡 */
+export const BATTLE_EXP_WIN = 60;
+/** 吃鸡战绩经验：前 3 名 */
+export const BATTLE_EXP_TOP3 = 40;
+/** 吃鸡战绩经验：前 10 名 */
+export const BATTLE_EXP_TOP10 = 20;
+/** 吃鸡战绩经验：其余名次 */
+export const BATTLE_EXP_FINISH = 5;
+/** 吃鸡战绩经验：每击杀 */
+export const BATTLE_EXP_PER_KILL = 5;
+/** 吃鸡战绩经验：击杀部分上限 */
+export const BATTLE_KILL_EXP_CAP = 25;
 
 export type PetStage = {
   stage: number;
@@ -255,18 +275,91 @@ export function stageProgress(exp: number): number {
   return Math.min(1, Math.max(0, (value - current.minExp) / span));
 }
 
-/** 每次升阶 +1 张吃鸡券，逐级发放并封顶 MAX_TICKETS */
-export function ticketsAfterStageUps(
-  tickets: number,
-  fromStage: number,
-  toStage: number,
-): number {
-  let result = Number.isFinite(tickets) ? Math.max(0, Math.floor(tickets)) : 0;
-  const ups = Math.max(0, clampStage(toStage) - clampStage(fromStage));
-  for (let i = 0; i < ups; i += 1) {
-    result = Math.min(MAX_TICKETS, result + TICKETS_PER_STAGE_UP);
-  }
-  return result;
+/* -------------------------------------------------------------------------- */
+/* 吃鸡券：累计里程碑 + 升阶奖励                                                */
+/* -------------------------------------------------------------------------- */
+
+/** 累计 EXP 对应的「应发里程碑券数」：每满 100 EXP 一张 */
+export function milestoneTicketTarget(exp: number): number {
+  const value = Number.isFinite(exp) ? Math.max(0, Math.floor(exp)) : 0;
+  return Math.floor(value / TICKET_MILESTONE_EXP);
+}
+
+/**
+ * 升阶奖励：由第 n 阶升到第 n+1 阶时发 (n + 1) 张。
+ * 跨多阶则逐级累加（3 → 5 = +4 +5 = 9 张）。
+ */
+export function stageUpTicketReward(fromStage: number, toStage: number): number {
+  const from = clampStage(fromStage);
+  const to = clampStage(toStage);
+  let gain = 0;
+  for (let stage = from + 1; stage <= to; stage += 1) gain += stage;
+  return gain;
+}
+
+export type TicketSettlement = {
+  /** 结算后的券数（已封顶 MAX_TICKETS） */
+  tickets: number;
+  /** 已发放过的里程碑券数（只增不减，保证重复结算不重复发券） */
+  milestoneIssued: number;
+  /** 本次实际新增的券数（可能是 0，封顶时被丢弃） */
+  gained: number;
+};
+
+/**
+ * 幂等的券结算：以「已发放里程碑数 milestoneIssued」为水位线，只补发差额；
+ * 升阶奖励以数据库里的旧 stage 为起点，只对本次新跨过的阶段发券。
+ * 调用方必须把返回的 milestoneIssued 一并写回，重复调用才不会重复发券。
+ */
+export function settleTickets(input: {
+  tickets: number;
+  exp: number;
+  milestoneIssued: number;
+  fromStage: number;
+  toStage: number;
+}): TicketSettlement {
+  const current = Number.isFinite(input.tickets) ? Math.max(0, Math.floor(input.tickets)) : 0;
+  const issued = Number.isFinite(input.milestoneIssued)
+    ? Math.max(0, Math.floor(input.milestoneIssued))
+    : 0;
+  const target = milestoneTicketTarget(input.exp);
+  const milestoneGain = Math.max(0, target - issued);
+  const stageGain = stageUpTicketReward(input.fromStage, input.toStage);
+  const tickets = Math.min(MAX_TICKETS, current + milestoneGain + stageGain);
+  return {
+    tickets,
+    milestoneIssued: Math.max(issued, target),
+    gained: tickets - current,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* 喂食 / 吃鸡战绩经验                                                          */
+/* -------------------------------------------------------------------------- */
+
+export type BattleExpResult = {
+  /** 合计获得 EXP */
+  total: number;
+  /** 名次部分 */
+  placement: number;
+  /** 击杀部分（已封顶） */
+  kills: number;
+};
+
+/** 吃鸡战绩经验：名次 + 击杀（每击杀 +5，最多 +25） */
+export function battleExp(kills: number, placement: number): BattleExpResult {
+  const place = Number.isFinite(placement) ? Math.floor(placement) : 0;
+  const killsCount = Number.isFinite(kills) ? Math.max(0, Math.floor(kills)) : 0;
+  const placementExp =
+    place === 1
+      ? BATTLE_EXP_WIN
+      : place >= 2 && place <= 3
+        ? BATTLE_EXP_TOP3
+        : place >= 4 && place <= 10
+          ? BATTLE_EXP_TOP10
+          : BATTLE_EXP_FINISH;
+  const killExp = Math.min(BATTLE_KILL_EXP_CAP, killsCount * BATTLE_EXP_PER_KILL);
+  return { total: placementExp + killExp, placement: placementExp, kills: killExp };
 }
 
 /* -------------------------------------------------------------------------- */

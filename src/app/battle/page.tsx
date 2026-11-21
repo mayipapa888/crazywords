@@ -1,7 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useState, type ReactNode, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { useBattle, type FeedItem } from "@/components/battle/useBattle";
 import type { BattleHud, BattleResult, FeedTone } from "@/components/battle/engine";
 
@@ -23,6 +30,31 @@ const FEED_TONE_CLASS: Record<FeedTone, string> = {
   loot: "border-amber-300/40 bg-amber-400/20 text-amber-100",
 };
 
+/** 页面外层阶段：loading = 正在扣券；finished = 已结束并进入结算 */
+type PagePhase = "loading" | "no-ticket" | "ready" | "playing" | "finished";
+
+/** 战绩上传状态：idle 只会出现在没有进入结算的瞬间 */
+type FinishState =
+  | { status: "idle" }
+  | { status: "submitting" }
+  | { status: "done"; expGained: number; placementExp: number; killsExp: number }
+  | { status: "error"; message: string };
+
+type EnterOutcome =
+  | { kind: "ok"; recordId: string; tickets: number | null }
+  | { kind: "no-ticket" }
+  | { kind: "error"; message: string };
+
+type FinishOutcome =
+  | {
+      kind: "ok";
+      expGained: number;
+      placementExp: number;
+      killsExp: number;
+      tickets: number | null;
+    }
+  | { kind: "error"; message: string };
+
 function formatClock(seconds: number): string {
   const total = Math.max(0, Math.ceil(seconds));
   const minutes = Math.floor(total / 60);
@@ -35,6 +67,100 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor(total / 60);
   const rest = total % 60;
   return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+/** 读取 JSON 对象；非 JSON / 非对象一律视为空对象，避免把解析错误抛给调用方 */
+async function readJsonObject(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const value: unknown = await response.json();
+    return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
+}
+
+function readApiError(data: Record<string, unknown>, status: number): string {
+  const message = data.error;
+  if (typeof message === "string" && message.trim()) return message;
+  return `请求失败（HTTP ${status}）`;
+}
+
+/**
+ * 进入战场（扣 1 张券）。契约：
+ * - 200 { ok: true, recordId, tickets }
+ * - 409 { error, tickets: 0 }
+ */
+async function requestEnter(): Promise<EnterOutcome> {
+  try {
+    const response = await fetch("/api/pet/battle/enter", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      cache: "no-store",
+    });
+    const data = await readJsonObject(response);
+
+    if (response.status === 409) return { kind: "no-ticket" };
+    if (!response.ok || data.ok !== true) {
+      return { kind: "error", message: readApiError(data, response.status) };
+    }
+
+    const recordId = typeof data.recordId === "string" ? data.recordId : "";
+    if (!recordId) return { kind: "error", message: "进入接口未返回本局凭证，请重试" };
+
+    return {
+      kind: "ok",
+      recordId,
+      tickets: typeof data.tickets === "number" ? data.tickets : null,
+    };
+  } catch {
+    return { kind: "error", message: "网络异常，请检查连接后重试" };
+  }
+}
+
+/**
+ * 上传战绩。同一 recordId 后端幂等，因此失败后重试安全。
+ * placement：活到最后 = 1，否则按引擎给出的剩余名次。
+ */
+async function requestFinish(recordId: string, battle: BattleResult): Promise<FinishOutcome> {
+  try {
+    const response = await fetch("/api/pet/battle/finish", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recordId,
+        kills: battle.kills,
+        placement: battle.win ? 1 : battle.rank,
+        seconds: Math.max(0, Math.round(battle.survived)),
+      }),
+      cache: "no-store",
+    });
+    const data = await readJsonObject(response);
+
+    if (!response.ok || data.ok !== true) {
+      return { kind: "error", message: readApiError(data, response.status) };
+    }
+
+    const rawBreakdown = data.breakdown;
+    const breakdown =
+      rawBreakdown && typeof rawBreakdown === "object"
+        ? (rawBreakdown as Record<string, unknown>)
+        : {};
+    const rawPet = data.pet;
+    const pet =
+      rawPet && typeof rawPet === "object" ? (rawPet as Record<string, unknown>) : {};
+
+    return {
+      kind: "ok",
+      expGained:
+        typeof data.expGained === "number" ? Math.max(0, Math.round(data.expGained)) : 0,
+      placementExp: typeof breakdown.placement === "number" ? breakdown.placement : 0,
+      killsExp: typeof breakdown.kills === "number" ? breakdown.kills : 0,
+      tickets: typeof pet.tickets === "number" ? pet.tickets : null,
+    };
+  } catch {
+    return { kind: "error", message: "网络异常，请稍后重试" };
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -222,10 +348,12 @@ function HudOverlay({
 
 function StartScreen({
   armor,
+  tickets,
   onArmorChange,
   onStart,
 }: {
   armor: number;
+  tickets: number | null;
   onArmorChange: (armor: number) => void;
   onStart: () => void;
 }) {
@@ -246,6 +374,13 @@ function StartScreen({
           你和 20 名 AI 空降到 2400 × 2400 的荒岛。搜刮不靠运气，全靠枪法和走位：
           躲在箱子与树林后，盯着右上角小地图，活到最后一个。
         </p>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/60 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          <span>🎫 本局消耗 1 张吃鸡券</span>
+          <span className="font-semibold">
+            {tickets !== null ? `当前剩余 ${tickets} 张` : "券数查询中"}
+          </span>
+        </div>
 
         <div className="mt-3 grid gap-2 sm:grid-cols-2">
           <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-white px-2.5 py-2">
@@ -312,7 +447,7 @@ function StartScreen({
         </div>
 
         <button type="button" onClick={onStart} className="btn-primary mt-4 w-full py-3 text-base">
-          进入战场
+          开始游戏
         </button>
         <p className="mt-2 text-center text-[11px] text-[var(--muted)]">
           活到最后 →「大吉大利，今晚吃鸡」 · 超时按剩余人数排名 · 建议使用键鼠
@@ -322,12 +457,89 @@ function StartScreen({
   );
 }
 
+function NoTicketScreen() {
+  return (
+    <div className="no-scrollbar absolute inset-0 z-20 flex items-start justify-center overflow-y-auto bg-[#041019]/75 p-3 backdrop-blur-[3px]">
+      <div className="panel anim-fade-up my-auto w-full max-w-md p-5 text-center">
+        <span className="badge badge-warn">吃鸡券不足</span>
+        <h2 className="font-display mt-2 text-2xl">先攒几张吃鸡券吧</h2>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--muted)]">
+          每 100 经验 +1 券，升阶奖励、喂食也能拿券。
+          完成一次听写或磨耳朵，就能再来挑战。
+        </p>
+        <p className="mt-2 rounded-lg border border-[var(--line)] bg-[var(--paper)] px-3 py-2 text-xs text-[var(--muted)]">
+          进入战场会消耗 1 张吃鸡券，当前券已用完，本局不会开始。
+        </p>
+        <div className="mt-4 flex gap-2">
+          <Link href="/pet" className="btn-secondary flex-1">
+            返回宠物页
+          </Link>
+          <Link href="/dictation" className="btn-primary flex-1">
+            去学习
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EnterStatusScreen({
+  error,
+  onRetry,
+}: {
+  error: string | null;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="no-scrollbar absolute inset-0 z-20 flex items-start justify-center overflow-y-auto bg-[#041019]/70 p-3 backdrop-blur-[2px]">
+      <div className="panel anim-fade-up my-auto w-full max-w-sm p-5 text-center">
+        {error ? (
+          <>
+            <span className="badge badge-warn">进入失败</span>
+            <h2 className="font-display mt-2 text-xl">没能进入战场</h2>
+            <p className="mt-2 text-sm text-[var(--muted)]">{error}</p>
+            <div className="mt-4 flex gap-2">
+              <button type="button" onClick={onRetry} className="btn-primary flex-1">
+                重试进入
+              </button>
+              <Link href="/pet" className="btn-secondary flex-1">
+                返回宠物页
+              </Link>
+            </div>
+          </>
+        ) : (
+          <>
+            <span
+              className="mx-auto block h-8 w-8 animate-spin rounded-full border-2 border-[var(--teal)] border-t-transparent"
+              aria-hidden
+            />
+            <h2 className="font-display mt-3 text-xl">正在进入战场…</h2>
+            <p className="mt-1 text-sm text-[var(--muted)]">
+              正在扣除 1 张吃鸡券并生成本局战绩凭证。
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function EndScreen({
   result,
+  finish,
+  tickets,
+  restartPending,
+  restartError,
   onRestart,
+  onRetryFinish,
 }: {
   result: BattleResult;
+  finish: FinishState;
+  tickets: number | null;
+  restartPending: boolean;
+  restartError: string | null;
   onRestart: () => void;
+  onRetryFinish: () => void;
 }) {
   const reasonText =
     result.reason === "win"
@@ -335,6 +547,9 @@ function EndScreen({
       : result.reason === "timeout"
         ? "单局 5 分钟已到，按剩余人数结算。"
         : "被淘汰了，再来一局把名次打回去。";
+
+  const submitting = finish.status === "submitting";
+  const restartDisabled = submitting || restartPending;
 
   return (
     <div className="no-scrollbar absolute inset-0 z-20 flex items-start justify-center overflow-y-auto bg-[#041019]/75 p-3 backdrop-blur-[3px]">
@@ -355,7 +570,7 @@ function EndScreen({
           <div className="rounded-lg border border-[var(--line)] bg-[var(--paper)] px-2 py-2.5">
             <p className="text-[11px] text-[var(--muted)]">排名</p>
             <p className="stat-value mt-1 text-xl">
-              {result.rank}
+              {result.win ? 1 : result.rank}
               <span className="text-xs text-[var(--muted)]"> / {result.total}</span>
             </p>
           </div>
@@ -369,19 +584,74 @@ function EndScreen({
           </div>
         </div>
 
-        <p className="mt-2 text-[11px] text-[var(--muted)]">
-          本局共 {result.total} 人 ·{" "}
-          {result.win ? "你是最后的赢家" : "下次试试贴着毒圈边缘推进"}
-        </p>
+        <div className="mt-3 rounded-lg border border-[var(--line)] bg-white px-3 py-2.5 text-left">
+          {finish.status === "done" ? (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-[var(--muted)]">本局获得经验</span>
+                <span className="font-display text-xl text-[var(--teal)]">
+                  +{finish.expGained}
+                </span>
+              </div>
+              <p className="mt-1 text-[11px] text-[var(--muted)]">
+                排名 +{finish.placementExp} · 击杀 +{finish.killsExp}
+              </p>
+              {tickets !== null && (
+                <p className="mt-1 text-[11px] text-[var(--muted)]">
+                  当前吃鸡券：<span className="font-semibold text-[var(--ink)]">{tickets}</span> 张
+                </p>
+              )}
+            </>
+          ) : finish.status === "error" ? (
+            <>
+              <p className="text-xs text-rose-600">战绩上传失败，可重试</p>
+              <p className="mt-1 text-[11px] text-[var(--muted)]">
+                {finish.message}
+              </p>
+              <button
+                type="button"
+                onClick={onRetryFinish}
+                disabled={submitting}
+                className="btn-secondary mt-2 w-full px-3 py-1.5 text-xs disabled:opacity-60"
+              >
+                重试上传
+              </button>
+            </>
+          ) : (
+            <div className="flex items-center justify-center gap-2 py-1 text-xs text-[var(--muted)]">
+              {submitting ? (
+                <>
+                  <span
+                    className="inline-block h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--teal)] border-t-transparent"
+                    aria-hidden
+                  />
+                  战绩上传中…
+                </>
+              ) : (
+                "准备上传战绩…"
+              )}
+            </div>
+          )}
+        </div>
 
         <div className="mt-4 flex gap-2">
-          <button type="button" onClick={onRestart} className="btn-primary flex-1">
-            再来一局
+          <button
+            type="button"
+            onClick={onRestart}
+            disabled={restartDisabled}
+            className="btn-primary flex-1 disabled:opacity-60"
+          >
+            {restartPending ? "正在扣券…" : "再来一局"}
           </button>
           <Link href="/pet" className="btn-secondary flex-1">
             返回宠物
           </Link>
         </div>
+        {restartError && (
+          <p className="mt-2 text-[11px] text-rose-600">
+            进入下一局失败：{restartError}
+          </p>
+        )}
       </div>
     </div>
   );
@@ -396,7 +666,7 @@ export default function BattlePage() {
     containerRef,
     canvasRef,
     minimapRef,
-    phase,
+    phase: gamePhase,
     hud,
     feed,
     result,
@@ -404,12 +674,136 @@ export default function BattlePage() {
     start,
     toggleMuted,
   } = useBattle();
+
+  /** 外层结算状态：不改变 useBattle 内部的游戏状态机 */
+  const [phase, setPhase] = useState<PagePhase>("loading");
   const [armor, setArmor] = useState(50);
+  const [recordId, setRecordId] = useState<string | null>(null);
+  const [tickets, setTickets] = useState<number | null>(null);
+  const [enterError, setEnterError] = useState<string | null>(null);
+  const [finishState, setFinishState] = useState<FinishState>({ status: "idle" });
+  const [restartPending, setRestartPending] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+
+  /** 严格模式双挂载守卫：确保首次加载只扣一次券 */
+  const enterMountRef = useRef(false);
+  /** 防止「重试进入」被连点 */
+  const enteringRef = useRef(false);
+  /** 防止「再来一局」被连点 */
+  const restartingRef = useRef(false);
+  /** 同一 recordId 只自动上传一次（严格模式 / 重渲染） */
+  const finishLockRef = useRef<string | null>(null);
+  /** 防止重试上传被连点 */
+  const finishingRef = useRef(false);
+
+  const runEnter = useCallback(async () => {
+    if (enteringRef.current) return;
+    enteringRef.current = true;
+    setEnterError(null);
+    setPhase("loading");
+    try {
+      const outcome = await requestEnter();
+      if (outcome.kind === "ok") {
+        finishLockRef.current = null;
+        setRecordId(outcome.recordId);
+        setTickets(outcome.tickets);
+        setFinishState({ status: "idle" });
+        setPhase("ready");
+      } else if (outcome.kind === "no-ticket") {
+        setRecordId(null);
+        setTickets(0);
+        setPhase("no-ticket");
+      } else {
+        setEnterError(outcome.message);
+      }
+    } finally {
+      enteringRef.current = false;
+    }
+  }, []);
+
+  /** 首次挂载：先扣券，再展示开始界面（或券不足面板） */
+  useEffect(() => {
+    if (enterMountRef.current) return;
+    enterMountRef.current = true;
+    void runEnter();
+  }, [runEnter]);
+
+  const submitFinish = useCallback(async (id: string, battle: BattleResult) => {
+    if (finishingRef.current) return;
+    finishingRef.current = true;
+    setFinishState({ status: "submitting" });
+    try {
+      const outcome = await requestFinish(id, battle);
+      if (outcome.kind === "ok") {
+        setFinishState({
+          status: "done",
+          expGained: outcome.expGained,
+          placementExp: outcome.placementExp,
+          killsExp: outcome.killsExp,
+        });
+        if (outcome.tickets !== null) setTickets(outcome.tickets);
+      } else {
+        setFinishState({ status: "error", message: outcome.message });
+      }
+    } finally {
+      finishingRef.current = false;
+    }
+  }, []);
+
+  /** 引擎结束 → 外层进入结算 */
+  useEffect(() => {
+    if (gamePhase === "over") setPhase("finished");
+  }, [gamePhase]);
+
+  /** 结算页首次出现时上传战绩；同一 recordId 只触发一次 */
+  useEffect(() => {
+    if (phase !== "finished" || !result || !recordId) return;
+    if (finishLockRef.current === recordId) return;
+    finishLockRef.current = recordId;
+    void submitFinish(recordId, result);
+  }, [phase, result, recordId, submitFinish]);
 
   const handleStart = () => {
-    // TODO(access-control): 当前为完全放开的测试模式，进入前不做任何校验。
-    // 后续接入 /api/pet 的 tickets 校验并扣减：读取 tickets，> 0 时扣 1 张再 start(armor)。
+    if (phase !== "ready" || !recordId) return;
+    setPhase("playing");
     start(armor);
+  };
+
+  /** 再来一局必须重新扣券：拿到新 recordId 后才重置游戏 */
+  const handleRestart = useCallback(async () => {
+    if (restartingRef.current) return;
+    restartingRef.current = true;
+    setRestartPending(true);
+    setRestartError(null);
+    try {
+      const outcome = await requestEnter();
+      if (outcome.kind === "ok") {
+        finishLockRef.current = null;
+        setRecordId(outcome.recordId);
+        setTickets(outcome.tickets);
+        setFinishState({ status: "idle" });
+        setPhase("playing");
+        start(armor);
+      } else if (outcome.kind === "no-ticket") {
+        setRecordId(null);
+        setTickets(0);
+        setPhase("no-ticket");
+      } else {
+        setRestartError(outcome.message);
+      }
+    } finally {
+      restartingRef.current = false;
+      setRestartPending(false);
+    }
+  }, [armor, start]);
+
+  const handleFinishRetry = () => {
+    if (!recordId || !result) return;
+    void submitFinish(recordId, result);
+  };
+
+  const handleEnterRetry = () => {
+    void runEnter();
   };
 
   return (
@@ -423,8 +817,11 @@ export default function BattlePage() {
             ← 返回宠物
           </Link>
           <h1 className="font-display text-xl">吃鸡训练场</h1>
-          <span className="badge badge-warn">测试模式 · 不限次数</span>
+          <span className="badge badge-warn">🎫 本局消耗 1 张券</span>
           <span className="badge hidden sm:inline-flex">21 人 · 5 分钟</span>
+          {tickets !== null && (
+            <span className="badge hidden sm:inline-flex">剩余 {tickets} 张</span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <button
@@ -456,11 +853,30 @@ export default function BattlePage() {
         )}
 
         {phase === "ready" && (
-          <StartScreen armor={armor} onArmorChange={setArmor} onStart={handleStart} />
+          <StartScreen
+            armor={armor}
+            tickets={tickets}
+            onArmorChange={setArmor}
+            onStart={handleStart}
+          />
         )}
 
-        {phase === "over" && result && (
-          <EndScreen result={result} onRestart={() => start(armor)} />
+        {phase === "loading" && (
+          <EnterStatusScreen error={enterError} onRetry={handleEnterRetry} />
+        )}
+
+        {phase === "no-ticket" && <NoTicketScreen />}
+
+        {phase === "finished" && result && (
+          <EndScreen
+            result={result}
+            finish={finishState}
+            tickets={tickets}
+            restartPending={restartPending}
+            restartError={restartError}
+            onRestart={handleRestart}
+            onRetryFinish={handleFinishRetry}
+          />
         )}
       </div>
     </div>

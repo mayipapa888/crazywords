@@ -31,6 +31,8 @@ model User {
   notes          KnowledgeNote[]
   listeningLogs  ListeningLog[]
   pet            Pet?
+  battleRecords  BattleRecord[]
+  pointSpends    PointSpend[]
 }
 
 model WordList {
@@ -173,16 +175,52 @@ model KnowledgeNote {
 
 /// 宠物养成：exp 为累计经验，stage 1..5；GET /api/pet 时惰性结算当日经验
 model Pet {
-  id           String   @id @default(cuid())
-  userId       String   @unique
-  name         String   @default("小星")
-  stage        Int      @default(1) // 1..5
-  exp          Int      @default(0) // 累计经验
-  tickets      Int      @default(0) // 吃鸡券
-  lastExpDate  String   @default("") // 最近一次结算经验的 YYYY-MM-DD（Asia/Shanghai）
-  dailyExpJson String   @default("{}") // 当天各来源已获得的 EXP，如 {"dictation":12,"listening":3,...}
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  name             String   @default("小星")
+  stage            Int      @default(1) // 1..5
+  exp              Int      @default(0) // 累计经验
+  tickets          Int      @default(0) // 吃鸡券
+  /// 已按「每 100 EXP」发放过的券数；只增不减，用于幂等补发
+  milestoneIssued  Int      @default(0)
+  /// 当天已喂食次数（每天按 Asia/Shanghai 重置）
+  feedCountToday   Int      @default(0)
+  /// feedCountToday 所属日期 YYYY-MM-DD
+  feedDate         String   @default("")
+  lastExpDate      String   @default("") // 最近一次结算经验的 YYYY-MM-DD（Asia/Shanghai）
+  dailyExpJson     String   @default("{}") // 当天各来源已获得的 EXP，如 {"dictation":12,"listening":3,...}
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// 吃鸡战绩：enter 时创建（playing），finish 时结算经验（finished）
+model BattleRecord {
+  id         String    @id @default(cuid())
+  userId     String
+  status     String    @default("playing") // playing | finished
+  kills      Int       @default(0)
+  placement  Int       @default(0) // 1 = 吃鸡
+  seconds    Int       @default(0)
+  expGained  Int       @default(0)
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+/// 积分消耗流水：喂食等消耗，可用积分 = 累计积分 − SUM(amount)
+model PointSpend {
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Int
+  reason    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
 }

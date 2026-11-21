@@ -3,11 +3,17 @@
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
+  BATTLE_EXP_FINISH,
+  BATTLE_EXP_PER_KILL,
+  BATTLE_EXP_TOP10,
+  BATTLE_EXP_TOP3,
+  BATTLE_EXP_WIN,
+  BATTLE_KILL_EXP_CAP,
   EXP_SOURCES,
   MAX_DAILY_EXP,
-  MAX_TICKETS,
   NAME_MAX_LENGTH,
   STAGES,
+  TICKET_MILESTONE_EXP,
   sanitizePetName,
   stageName,
   type PetBreakdown,
@@ -21,9 +27,30 @@ type PetPayload = {
   nextStageExp: number | null;
   progress: number;
   tickets: number;
+  maxTickets: number;
   todayExp: number;
   todayBreakdown: PetBreakdown;
   maxStage: number;
+  /** 今日已喂食次数 / 每天上限 / 每次成本 / 每次经验 */
+  feedCountToday: number;
+  feedDailyCap: number;
+  feedPointsCost: number;
+  feedExp: number;
+  /** 累计积分（学习所得）、已消耗积分、当前可用积分 */
+  totalPoints: number;
+  spentPoints: number;
+  availablePoints: number;
+  milestoneIssued: number;
+  nextTicketExp: number;
+};
+
+type BattleRecordItem = {
+  id: string;
+  kills: number;
+  placement: number;
+  seconds: number;
+  expGained: number;
+  createdAt: string;
 };
 
 /** 五个阶段的一句话描述（展示在宠物形象下方） */
@@ -49,8 +76,18 @@ function isPetPayload(value: unknown): value is PetPayload {
     (typeof pet.nextStageExp === "number" || pet.nextStageExp === null) &&
     typeof pet.progress === "number" &&
     typeof pet.tickets === "number" &&
+    typeof pet.maxTickets === "number" &&
     typeof pet.todayExp === "number" &&
     typeof pet.maxStage === "number" &&
+    typeof pet.feedCountToday === "number" &&
+    typeof pet.feedDailyCap === "number" &&
+    typeof pet.feedPointsCost === "number" &&
+    typeof pet.feedExp === "number" &&
+    typeof pet.totalPoints === "number" &&
+    typeof pet.spentPoints === "number" &&
+    typeof pet.availablePoints === "number" &&
+    typeof pet.milestoneIssued === "number" &&
+    typeof pet.nextTicketExp === "number" &&
     ["dictation", "listening", "checkin", "notes"].every((key) => typeof b[key] === "number")
   );
 }
@@ -59,6 +96,66 @@ function extractPet(payload: unknown): PetPayload | null {
   if (!payload || typeof payload !== "object") return null;
   const pet = (payload as { pet?: unknown }).pet;
   return isPetPayload(pet) ? pet : null;
+}
+
+/** 只保留结构合法的战绩项，损坏项直接跳过 */
+function extractRecords(payload: unknown): BattleRecordItem[] | null {
+  if (!payload || typeof payload !== "object") return null;
+  const list = (payload as { records?: unknown }).records;
+  if (!Array.isArray(list)) return null;
+  const parsed: BattleRecordItem[] = [];
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (
+      typeof record.id === "string" &&
+      typeof record.kills === "number" &&
+      typeof record.placement === "number" &&
+      typeof record.seconds === "number" &&
+      typeof record.expGained === "number" &&
+      typeof record.createdAt === "string"
+    ) {
+      parsed.push({
+        id: record.id,
+        kills: record.kills,
+        placement: record.placement,
+        seconds: record.seconds,
+        expGained: record.expGained,
+        createdAt: record.createdAt,
+      });
+    }
+  }
+  return parsed;
+}
+
+const recordTimeFormatter = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
+/** 战绩时间一律按 Asia/Shanghai 展示 */
+function formatRecordTime(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "—";
+  return recordTimeFormatter.format(date);
+}
+
+/** 秒 → mm:ss */
+function formatDuration(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const minutes = Math.floor(total / 60);
+  const rest = total % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function placementLabel(placement: number): string {
+  if (placement === 1) return "🍗 吃鸡";
+  if (placement > 1) return `第 ${placement} 名`;
+  return "未记录名次";
 }
 
 function errorMessage(payload: unknown, status: number): string {
@@ -385,6 +482,13 @@ export default function PetPage() {
   const [draftName, setDraftName] = useState("");
   const [renameError, setRenameError] = useState<string | null>(null);
   const [savingName, setSavingName] = useState(false);
+  const [feeding, setFeeding] = useState(false);
+  const [feedNote, setFeedNote] = useState<string | null>(null);
+  const [feedError, setFeedError] = useState<string | null>(null);
+  const [showPointsInfo, setShowPointsInfo] = useState(false);
+  const [records, setRecords] = useState<BattleRecordItem[]>([]);
+  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [recordsError, setRecordsError] = useState<string | null>(null);
 
   const requestRef = useRef<AbortController | null>(null);
   const nameInputRef = useRef<HTMLInputElement | null>(null);
@@ -415,6 +519,24 @@ export default function PetPage() {
     }
   }, []);
 
+  const loadRecords = useCallback(async () => {
+    setRecordsLoading(true);
+    setRecordsError(null);
+    try {
+      const res = await fetch("/api/pet/battle/records", { cache: "no-store" });
+      const payload: unknown = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(errorMessage(payload, res.status));
+
+      const next = extractRecords(payload);
+      if (!next) throw new Error("返回数据格式异常");
+      setRecords(next);
+    } catch (e) {
+      setRecordsError(e instanceof Error ? e.message : "战绩加载失败");
+    } finally {
+      setRecordsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
     return () => {
@@ -422,6 +544,10 @@ export default function PetPage() {
       requestRef.current = null;
     };
   }, [load]);
+
+  useEffect(() => {
+    void loadRecords();
+  }, [loadRecords]);
 
   useEffect(() => {
     if (renaming) nameInputRef.current?.focus();
@@ -469,6 +595,31 @@ export default function PetPage() {
     }
   };
 
+  const feed = async () => {
+    if (!pet || feeding) return;
+    setFeeding(true);
+    setFeedError(null);
+    setFeedNote(null);
+    try {
+      const res = await fetch("/api/pet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "feed" }),
+      });
+      const payload: unknown = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(errorMessage(payload, res.status));
+
+      const next = extractPet(payload);
+      if (!next) throw new Error("返回数据格式异常");
+      setPet(next);
+      setFeedNote(`已喂食，+${next.feedExp} EXP`);
+    } catch (e) {
+      setFeedError(e instanceof Error ? e.message : "喂食失败，请稍后重试");
+    } finally {
+      setFeeding(false);
+    }
+  };
+
   if (!pet) {
     return (
       <div className="flex h-full min-h-0 flex-col gap-2">
@@ -492,9 +643,14 @@ export default function PetPage() {
   const percent = Math.round(Math.min(1, Math.max(0, pet.progress)) * 100);
   const nextStageName = pet.nextStageExp === null ? null : (STAGES[pet.stage]?.name ?? null);
   const line = STAGE_LINES[pet.stage - 1] ?? STAGE_LINES[0];
+  const feedFull = pet.feedCountToday >= pet.feedDailyCap;
+  const pointsShortfall = Math.max(0, pet.feedPointsCost - pet.availablePoints);
+  const canFeed = !feedFull && pointsShortfall === 0;
+  const hasTickets = pet.tickets > 0;
+  const expToNextTicket = Math.max(0, pet.nextTicketExp - pet.exp);
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-2">
+    <div className="flex flex-col gap-2">
       {/* 顶部：名字 / 阶段 / EXP / 进度 / 吃鸡券 */}
       <section className="panel shrink-0 px-4 py-2.5">
         <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1.5">
@@ -580,7 +736,7 @@ export default function PetPage() {
               <span className="font-display text-sm tabular-nums text-[var(--accent)]">
                 {pet.tickets}
               </span>
-              <span className="text-[11px] text-[var(--muted)]">/ {MAX_TICKETS}</span>
+              <span className="text-[11px] text-[var(--muted)]">/ {pet.maxTickets}</span>
             </span>
           </div>
         </div>
@@ -632,10 +788,75 @@ export default function PetPage() {
             );
           })}
         </div>
+
+        {/* 喂食 + 当前可用积分 */}
+        <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5 border-t border-[var(--line)] pt-2">
+          <button
+            type="button"
+            onClick={() => void feed()}
+            disabled={!canFeed || feeding}
+            title={
+              canFeed
+                ? `消耗 ${pet.feedPointsCost} 积分，获得 ${pet.feedExp} EXP`
+                : feedFull
+                  ? "今日喂食次数已用完，明天再来"
+                  : `积分不足，还差 ${pointsShortfall} 分`
+            }
+            className="btn-accent px-3 py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {feeding
+              ? "喂食中…"
+              : `🍖 喂食 · ${pet.feedPointsCost} 积分 → +${pet.feedExp} EXP`}
+            <span className="ml-1 opacity-85">
+              （今日 {pet.feedCountToday}/{pet.feedDailyCap}）
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowPointsInfo((value) => !value)}
+            aria-expanded={showPointsInfo}
+            title="点击查看积分说明"
+            className="inline-flex items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--paper)] px-2 py-1 text-[11px] text-[var(--muted)] transition hover:bg-[var(--chip)]"
+          >
+            <span>💎 当前可用积分</span>
+            <span className="font-display text-sm tabular-nums text-[var(--teal)]">
+              {pet.availablePoints}
+            </span>
+            <span className="text-[10px]">
+              （累计 {pet.totalPoints} · 已消耗 {pet.spentPoints}）
+            </span>
+            <span className="text-[10px] text-[var(--teal)]">
+              {showPointsInfo ? "收起" : "说明"}
+            </span>
+          </button>
+
+          <span className="text-[10px] text-[var(--muted)]">
+            {pet.tickets < pet.maxTickets
+              ? `再获得 ${expToNextTicket} EXP 得 1 张券`
+              : `券已满 ${pet.maxTickets} 张，继续攒 EXP 不再增加`}
+          </span>
+
+          {(feedFull || pointsShortfall > 0) && (
+            <span className="text-[11px] text-[var(--danger)]">
+              {feedFull ? "今日喂食次数已用完" : `积分不足，还差 ${pointsShortfall} 分`}
+            </span>
+          )}
+          {feedError && <span className="text-[11px] text-[var(--danger)]">{feedError}</span>}
+          {feedNote && <span className="text-[11px] text-[var(--teal)]">{feedNote}</span>}
+        </div>
+
+        {showPointsInfo && (
+          <p className="mt-1.5 rounded-lg border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[11px] leading-relaxed text-[var(--muted)]">
+            累计积分 = 不重复单词 ×10 + 当天打卡 20 + 首次新词 ×5 + 磨耳朵每 5 分钟 1；
+            喂食每次消耗 {pet.feedPointsCost} 分并记入积分流水，因此「当前可用积分 =
+            累计积分 − 已消耗积分」。
+          </p>
+        )}
       </section>
 
       {/* 中间：宠物形象 */}
-      <section className="panel relative flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-4 py-2">
+      <section className="panel relative flex shrink-0 flex-col items-center justify-center overflow-hidden px-4 py-3">
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0"
@@ -687,15 +908,92 @@ export default function PetPage() {
         </p>
       </section>
 
-      {/* 底部：游戏入口 */}
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2 text-[11px] text-[var(--muted)]">
-          <span className="badge badge-warn">测试模式 · 不限次数</span>
-          <span>吃鸡券照常累计：每次升阶 +1，最多 {MAX_TICKETS} 张</span>
+      {/* 最近战绩 */}
+      <section className="panel shrink-0 px-4 py-2.5">
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+          <h2 className="text-sm font-medium text-[var(--ink)]">最近战绩</h2>
+          <button
+            type="button"
+            onClick={() => void loadRecords()}
+            disabled={recordsLoading}
+            className="text-[11px] text-[var(--teal)] transition hover:underline disabled:opacity-50"
+          >
+            {recordsLoading ? "刷新中…" : "刷新"}
+          </button>
         </div>
-        <Link href="/battle" className="btn-accent px-5">
-          去玩吃鸡
-        </Link>
+
+        {recordsError ? (
+          <p className="mt-1.5 text-[11px] text-[var(--danger)]">战绩加载失败：{recordsError}</p>
+        ) : records.length === 0 ? (
+          <p className="mt-1.5 text-[11px] text-[var(--muted)]">
+            {recordsLoading ? "正在读取战绩…" : "还没有战绩，攒够券去开一局吧。"}
+          </p>
+        ) : (
+          <ul className="mt-1.5 flex flex-col gap-1">
+            {records.map((record) => (
+              <li
+                key={record.id}
+                className="flex flex-wrap items-center gap-x-3 gap-y-0.5 rounded-lg border border-[var(--line)] bg-[var(--paper)] px-2 py-1 text-[11px]"
+              >
+                <span className="min-w-[3.5rem] font-medium text-[var(--ink)]">
+                  {placementLabel(record.placement)}
+                </span>
+                <span className="text-[var(--muted)]">
+                  击杀 <span className="tabular-nums text-[var(--ink)]">{record.kills}</span>
+                </span>
+                <span className="text-[var(--muted)]">
+                  时长{" "}
+                  <span className="tabular-nums text-[var(--ink)]">
+                    {formatDuration(record.seconds)}
+                  </span>
+                </span>
+                <span className="tabular-nums text-[var(--accent)]">
+                  +{record.expGained} EXP
+                </span>
+                <span className="ml-auto text-[10px] text-[var(--muted)]">
+                  {formatRecordTime(record.createdAt)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* 底部：规则说明 + 游戏入口 */}
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="flex flex-1 flex-col gap-0.5 text-[10px] leading-relaxed text-[var(--muted)]">
+          <span>
+            🎫 券：每累计 {TICKET_MILESTONE_EXP} EXP +1 张（已发里程碑 {pet.milestoneIssued} 张）
+            · 升阶奖励 +2/+3/+4/+5 张 · 上限 {pet.maxTickets} 张（超出丢弃）· 每局消耗 1 张
+          </span>
+          <span>
+            🍖 喂食：{pet.feedPointsCost} 积分 → +{pet.feedExp} EXP，每天 {pet.feedDailyCap} 次
+            （Asia/Shanghai 重置）
+          </span>
+          <span>
+            🏆 战绩经验：吃鸡 +{BATTLE_EXP_WIN} · 前 3 +{BATTLE_EXP_TOP3} · 前 10 +
+            {BATTLE_EXP_TOP10} · 其他 +{BATTLE_EXP_FINISH} · 每击杀 +{BATTLE_EXP_PER_KILL}
+            （最多 +{BATTLE_KILL_EXP_CAP}）
+          </span>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-0.5">
+          {hasTickets ? (
+            <Link href="/battle" className="btn-accent px-5">
+              去玩吃鸡（消耗 1 张券）
+            </Link>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled
+                className="btn-accent cursor-not-allowed px-5 opacity-50"
+              >
+                去玩吃鸡
+              </button>
+              <span className="text-[10px] text-[var(--danger)]">先去学习攒券</span>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );
