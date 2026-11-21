@@ -69,7 +69,21 @@ export type PointsSummary = {
  * 汇总某个用户的累计积分与每日明细。
  * 单用户数据量小，全部历史一次读出后在内存中按自然日聚合。
  */
-export async function computePoints(userId: string, now: Date = new Date()): Promise<PointsSummary> {
+/** Asia/Shanghai 当天 0 点对应的 UTC 时刻（无夏令时，固定 +8） */
+export function shanghaiDayStart(now: Date = new Date()): Date {
+  const [year, month, day] = dayKey(now).split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day) - 8 * 3600_000);
+}
+
+/**
+ * @param since 只统计该时刻（含）之后的积分；用于「积分从某天开始重新计算」的场景。
+ *              新词判定仍基于全量历史，避免把复习词误判成新词。
+ */
+export async function computePoints(
+  userId: string,
+  now: Date = new Date(),
+  since?: Date,
+): Promise<PointsSummary> {
   const [attempts, listeningLogs] = await Promise.all([
     prisma.attempt.findMany({
       where: { session: { userId } },
@@ -112,9 +126,13 @@ export async function computePoints(userId: string, now: Date = new Date()): Pro
   const days: PointDay[] = [];
   let totalPoints = 0;
 
+  const sinceKey = since ? dayKey(since) : null;
+
   for (const date of [...byDay.keys()].sort()) {
     const agg = byDay.get(date);
     if (!agg) continue;
+    // 只统计 since 当天及之后的日子
+    if (sinceKey && date < sinceKey) continue;
 
     const words = agg.entries.size;
     const newWords = newWordsByDay.get(date) ?? 0;

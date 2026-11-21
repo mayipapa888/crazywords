@@ -8,7 +8,7 @@
 
 import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { computePoints } from "@/lib/points";
+import { computePoints, shanghaiDayStart } from "@/lib/points";
 import {
   DEFAULT_PET_NAME,
   EMPTY_BREAKDOWN,
@@ -151,7 +151,8 @@ async function loadTodayStats(userId: string, today: string): Promise<DailySourc
  */
 export async function loadPointsState(userId: string): Promise<PointsState> {
   const [summary, spend] = await Promise.all([
-    computePoints(userId),
+    // 积分从「今天」重新起算：只统计上海时区今天 0 点之后的学习所得。
+    computePoints(userId, new Date(), shanghaiDayStart()),
     prisma.pointSpend.aggregate({ where: { userId }, _sum: { amount: true } }),
   ]);
   const totalPoints = Math.max(0, summary.totalPoints);
