@@ -82,12 +82,13 @@ export default function NotesPage() {
   const [query, setQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
-  const [draftHtml, setDraftHtml] = useState("");
   const [saving, setSaving] = useState(false);
   const [reviewIndex, setReviewIndex] = useState(0);
   /** 卡片点击后弹出的详情窗口 */
   const [modalNote, setModalNote] = useState<Note | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
+  /** 进入编辑视图时写入编辑器的初始 HTML；只在挂载时应用一次，之后 DOM 完全由浏览器管理 */
+  const initialHtmlRef = useRef<string>("");
   /** 工具栏（下拉框/取色器）会抢焦点，记住最近一次编辑器内的选区以便恢复。 */
   const savedRangeRef = useRef<Range | null>(null);
 
@@ -180,6 +181,16 @@ export default function NotesPage() {
   useEffect(() => {
     if (view !== "edit") return;
     savedRangeRef.current = null;
+  }, [view, editingId]);
+
+  // 只在进入编辑（或切换笔记）时把初始 HTML 写入编辑器；
+  // 之后不再由 React 控制内容，避免改标题等重渲染把正文重置掉。
+  useEffect(() => {
+    if (view !== "edit") return;
+    const editor = editorRef.current;
+    if (!editor) return;
+    const html = initialHtmlRef.current;
+    if (editor.innerHTML !== html) editor.innerHTML = html;
   }, [view, editingId]);
 
   function nodeInsideEditor(node: Node | null): boolean {
@@ -318,7 +329,7 @@ export default function NotesPage() {
   function startCreate() {
     setEditingId(null);
     setDraftTitle("");
-    setDraftHtml("");
+    initialHtmlRef.current = "";
     setError(null);
     setNotice(null);
     setView("edit");
@@ -327,7 +338,8 @@ export default function NotesPage() {
   function startEdit(note: Note) {
     setEditingId(note.id);
     setDraftTitle(note.title);
-    setDraftHtml(note.contentHtml ? sanitizeHtml(note.contentHtml) : plainTextToHtml(note.content));
+    const html = note.contentHtml ? sanitizeHtml(note.contentHtml) : plainTextToHtml(note.content);
+    initialHtmlRef.current = html;
     setError(null);
     setNotice(null);
     setView("edit");
@@ -663,7 +675,7 @@ export default function NotesPage() {
                 清除格式
               </button>
             </div>
-            {/* 初始 HTML 已先经 sanitize；之后编辑内容由浏览器管理，draftHtml 不变时重渲染不会重置。 */}
+            {/* 初始 HTML 已先经 sanitize，进入编辑时写入一次；之后内容由浏览器管理，重渲染不会重置。 */}
             <div
               ref={editorRef}
               role="textbox"
@@ -673,7 +685,6 @@ export default function NotesPage() {
               suppressContentEditableWarning
               spellCheck={false}
               className="field no-scrollbar min-h-[12rem] flex-1 overflow-y-auto break-words text-sm leading-relaxed"
-              dangerouslySetInnerHTML={{ __html: draftHtml }}
               onInput={rememberSelection}
               onMouseUp={rememberSelection}
               onKeyUp={rememberSelection}
