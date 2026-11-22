@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HeroArt, SparkArt } from "@/components/Illustrations";
@@ -93,10 +94,10 @@ export default function HomePage() {
     let cancelled = false;
     (async () => {
       const [m, q, e, w] = await Promise.allSettled([
-        fetch("/api/me").then((r) => r.json() as Promise<Me>),
-        fetch("/api/queue/today").then((r) => r.json() as Promise<QueueResp>),
-        fetch("/api/entries").then((r) => r.json() as Promise<{ entries?: unknown[] }>),
-        fetch("/api/wrong-book").then((r) => r.json() as Promise<{ items?: unknown[] }>),
+        fetch(withBase("/api/me")).then((r) => r.json() as Promise<Me>),
+        fetch(withBase("/api/queue/today")).then((r) => r.json() as Promise<QueueResp>),
+        fetch(withBase("/api/entries")).then((r) => r.json() as Promise<{ entries?: unknown[] }>),
+        fetch(withBase("/api/wrong-book")).then((r) => r.json() as Promise<{ items?: unknown[] }>),
       ]);
       if (cancelled) return;
       if (m.status === "fulfilled") setMe(m.value);
@@ -135,7 +136,7 @@ export default function HomePage() {
     setDetailLoading(true);
     (async () => {
       try {
-        const res = await fetch(`/api/entries?q=${encodeURIComponent(word)}`);
+        const res = await fetch(withBase(`/api/entries?q=${encodeURIComponent(word)}`));
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = (await res.json()) as { entries?: EntryDetail[] };
         const list = Array.isArray(data.entries) ? data.entries : [];
@@ -188,7 +189,7 @@ export default function HomePage() {
       spokenWordRef.current = word.toLowerCase();
       const gen = speakGenRef.current;
       try {
-        const res = await fetch("/api/speech/tts", {
+        const res = await fetch(withBase("/api/speech/tts"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: word, language: "en-US" }),

@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
 import { extractChineseFromTranscript, segmentChinese } from "@/lib/speech/extract-meaning";
@@ -272,7 +273,7 @@ export default function DictationPage() {
       return;
     }
     try {
-      const res = await fetch("/api/speech/tts", {
+      const res = await fetch(withBase("/api/speech/tts"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text, language: lang }),
@@ -350,7 +351,7 @@ export default function DictationPage() {
       const value = (text || "").trim();
       if (!value || cancelled()) return;
       try {
-        const res = await fetch("/api/speech/tts", {
+        const res = await fetch(withBase("/api/speech/tts"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: value, language }),
@@ -488,8 +489,8 @@ export default function DictationPage() {
     setPhase("idle");
     try {
       const [meRes, sessRes] = await Promise.all([
-        fetch("/api/me"),
-        fetch("/api/sessions", {
+        fetch(withBase("/api/me")),
+        fetch(withBase("/api/sessions"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ source }),
@@ -559,7 +560,7 @@ export default function DictationPage() {
       const next = prev + 1;
       if (next >= items.length) {
         if (sessionId) {
-          void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" }).catch(
+          void fetch(withBase(`/api/sessions/${sessionId}/end`), { method: "POST" }).catch(
             () => undefined,
           );
         }
@@ -608,7 +609,7 @@ export default function DictationPage() {
         wordGen.current += 1;
         stopTtsSpeech();
 
-        const res = await fetch(`/api/sessions/${sessionId}/attempt`, {
+        const res = await fetch(withBase(`/api/sessions/${sessionId}/attempt`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -1027,7 +1028,7 @@ export default function DictationPage() {
         "重新开始会结束当前会话并从第 1 词重来，确定吗？",
       );
       if (!confirmed) return;
-      void fetch(`/api/sessions/${sessionId}/end`, { method: "POST" }).catch(
+      void fetch(withBase(`/api/sessions/${sessionId}/end`), { method: "POST" }).catch(
         () => undefined,
       );
     }

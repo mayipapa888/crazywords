@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useEffect, useState } from "react";
 
 type Item = {
@@ -23,7 +24,7 @@ export default function WrongBookPage() {
   const [page, setPage] = useState(0);
 
   useEffect(() => {
-    fetch("/api/wrong-book")
+    fetch(withBase("/api/wrong-book"))
       .then((r) => r.json())
       .then((d) => setItems(d.items || []));
   }, []);

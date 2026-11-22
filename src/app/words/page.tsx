@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BookArt } from "@/components/Illustrations";
 
@@ -118,7 +119,7 @@ export default function WordsPage() {
       const seq = ++speakSeqRef.current;
       const stale = () => speakSeqRef.current !== seq;
       try {
-        const res = await fetch("/api/speech/tts", {
+        const res = await fetch(withBase("/api/speech/tts"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: word, language: "en-US" }),
@@ -193,7 +194,7 @@ export default function WordsPage() {
       if (keyword) params.set("q", keyword);
       if (nextListId) params.set("listId", nextListId);
       const qs = params.toString();
-      const res = await fetch(`/api/entries${qs ? `?${qs}` : ""}`);
+      const res = await fetch(withBase(`/api/entries${qs ? `?${qs}` : ""}`));
       const data = (await res.json().catch(() => ({}))) as {
         entries?: Entry[];
         error?: string;
@@ -215,7 +216,7 @@ export default function WordsPage() {
     setListsLoading(true);
     setListsError(null);
     try {
-      const res = await fetch("/api/lists");
+      const res = await fetch(withBase("/api/lists"));
       const data = (await res.json().catch(() => ({}))) as {
         lists?: ListSummary[];
         error?: string;
@@ -263,7 +264,7 @@ export default function WordsPage() {
     }
     setRenameBusy(true);
     try {
-      const res = await fetch(`/api/lists/${list.id}`, {
+      const res = await fetch(withBase(`/api/lists/${list.id}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
@@ -289,7 +290,7 @@ export default function WordsPage() {
       return;
     }
     try {
-      const res = await fetch(`/api/lists/${list.id}`, { method: "DELETE" });
+      const res = await fetch(withBase(`/api/lists/${list.id}`), { method: "DELETE" });
       const data = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) throw new Error(data.error || "删除词库失败");
       if (renamingId === list.id) setRenamingId(null);
@@ -320,7 +321,7 @@ export default function WordsPage() {
       const fd = new FormData();
       fd.append("file", file);
       // 不传 listName：服务端默认用文件名（去扩展名）作为词库名
-      const res = await fetch("/api/import", { method: "POST", body: fd });
+      const res = await fetch(withBase("/api/import"), { method: "POST", body: fd });
       const data = (await res.json().catch(() => ({}))) as ImportResult & { error?: string };
       if (!res.ok) {
         setImportError(data.error || "导入失败");
@@ -344,7 +345,7 @@ export default function WordsPage() {
   async function save() {
     if (!editing) return;
     try {
-      const res = await fetch(`/api/entries/${editing.id}`, {
+      const res = await fetch(withBase(`/api/entries/${editing.id}`), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -372,7 +373,7 @@ export default function WordsPage() {
   async function remove(id: string) {
     if (!window.confirm("确认删除该词条？")) return;
     try {
-      const res = await fetch(`/api/entries/${id}`, { method: "DELETE" });
+      const res = await fetch(withBase(`/api/entries/${id}`), { method: "DELETE" });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error || "删除失败");
@@ -578,10 +579,10 @@ export default function WordsPage() {
             <button type="submit" className="btn-primary !px-3 !py-1.5 !text-xs" disabled={importBusy}>
               {importBusy ? "导入中…" : "开始导入"}
             </button>
-            <a className="btn-secondary !px-3 !py-1.5 !text-xs" href="/api/import/template">
+            <a className="btn-secondary !px-3 !py-1.5 !text-xs" href={withBase("/api/import/template")}>
               下载 Excel 模板
             </a>
-            <a className="text-xs text-[var(--teal)] hover:underline" href="/templates/words-import.xlsx">
+            <a className="text-xs text-[var(--teal)] hover:underline" href={withBase("/templates/words-import.xlsx")}>
               静态模板
             </a>
           </div>

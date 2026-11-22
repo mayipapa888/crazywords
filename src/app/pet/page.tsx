@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
@@ -501,7 +502,7 @@ export default function PetPage() {
     setError(null);
 
     try {
-      const res = await fetch("/api/pet", { signal: controller.signal, cache: "no-store" });
+      const res = await fetch(withBase("/api/pet"), { signal: controller.signal, cache: "no-store" });
       const payload: unknown = await res.json().catch(() => null);
       if (!res.ok) throw new Error(errorMessage(payload, res.status));
 
@@ -523,7 +524,7 @@ export default function PetPage() {
     setRecordsLoading(true);
     setRecordsError(null);
     try {
-      const res = await fetch("/api/pet/battle/records", { cache: "no-store" });
+      const res = await fetch(withBase("/api/pet/battle/records"), { cache: "no-store" });
       const payload: unknown = await res.json().catch(() => null);
       if (!res.ok) throw new Error(errorMessage(payload, res.status));
 
@@ -576,7 +577,7 @@ export default function PetPage() {
     setSavingName(true);
     setRenameError(null);
     try {
-      const res = await fetch("/api/pet", {
+      const res = await fetch(withBase("/api/pet"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "rename", name: parsed.value }),
@@ -601,7 +602,7 @@ export default function PetPage() {
     setFeedError(null);
     setFeedNote(null);
     try {
-      const res = await fetch("/api/pet", {
+      const res = await fetch(withBase("/api/pet"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "feed" }),

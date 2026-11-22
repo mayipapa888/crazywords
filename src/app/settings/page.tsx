@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useEffect, useState } from "react";
 
 type SpeechStatus = {
@@ -38,7 +39,7 @@ export default function SettingsPage() {
   const [resetMsg, setResetMsg] = useState<{ text: string; ok: boolean } | null>(null);
 
   useEffect(() => {
-    fetch("/api/me")
+    fetch(withBase("/api/me"))
       .then((r) => r.json())
       .then((m) => {
         setGoal(m.dailyGoalDefault);
@@ -47,7 +48,7 @@ export default function SettingsPage() {
         setAutoStart(m.autoStartRecordSeconds ?? 10);
         setAutoNext(m.autoNextWordSeconds ?? 30);
       });
-    fetch("/api/speech/status")
+    fetch(withBase("/api/speech/status"))
       .then((r) => r.json())
       .then((s) => setSpeech(s))
       .catch(() => setSpeech({ error: "无法读取语音配置状态" }));
@@ -58,7 +59,7 @@ export default function SettingsPage() {
     setBusy(true);
     setMsg(null);
     try {
-      const res = await fetch("/api/me", {
+      const res = await fetch(withBase("/api/me"), {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -84,7 +85,7 @@ export default function SettingsPage() {
     setResetBusy(true);
     setResetMsg(null);
     try {
-      const res = await fetch("/api/admin/reset", {
+      const res = await fetch(withBase("/api/admin/reset"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: resetPassword }),

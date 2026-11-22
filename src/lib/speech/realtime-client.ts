@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { extractLemmaFromTranscript } from "./extract-lemma";
 
 export type RealtimeAsrHandlers = {
@@ -204,7 +205,7 @@ export class RealtimeAsrSession {
     this.stopPromise = null;
 
     try {
-      const tokenRes = await fetch("/api/speech/nls-token", { method: "POST" });
+      const tokenRes = await fetch(withBase("/api/speech/nls-token"), { method: "POST" });
       const cred = (await tokenRes.json()) as TokenPayload & { error?: string };
       if (this.stopRequested) return; // 启动期间已被 stop()：静默放弃
       if (!tokenRes.ok) {

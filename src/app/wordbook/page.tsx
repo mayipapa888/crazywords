@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useEffect, useState } from "react";
 import { BookArt } from "@/components/Illustrations";
 
@@ -60,7 +61,7 @@ export default function WordbookPage() {
         });
         if (query) params.set("q", query);
 
-        const res = await fetch(`/api/wordbook?${params.toString()}`);
+        const res = await fetch(withBase(`/api/wordbook?${params.toString()}`));
         const data = (await res.json()) as WordbookResponse;
         if (!res.ok) throw new Error(data.error || "加载失败");
         if (cancelled) return;

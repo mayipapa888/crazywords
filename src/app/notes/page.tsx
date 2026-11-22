@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NoteArt } from "@/components/Illustrations";
 import { sanitizeHtml } from "@/lib/notes/sanitize";
@@ -96,7 +97,7 @@ export default function NotesPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/notes");
+      const res = await fetch(withBase("/api/notes"));
       const data = (await res.json().catch(() => ({}))) as NotesResponse;
       if (!res.ok) throw new Error(data.error || "加载知识点失败");
       const list = Array.isArray(data.notes) ? data.notes : [];
@@ -375,7 +376,7 @@ export default function NotesPage() {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(editingId ? `/api/notes/${editingId}` : "/api/notes", {
+      const res = await fetch(withBase(editingId ? `/api/notes/${editingId}` : "/api/notes"), {
         method: editingId ? "PATCH" : "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -404,7 +405,7 @@ export default function NotesPage() {
 
     setError(null);
     try {
-      const res = await fetch(`/api/notes/${note.id}`, { method: "DELETE" });
+      const res = await fetch(withBase(`/api/notes/${note.id}`), { method: "DELETE" });
       const data = (await res.json().catch(() => ({}))) as NotesResponse;
       if (!res.ok) throw new Error(data.error || "删除失败");
 

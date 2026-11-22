@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import {
   useCallback,
   useEffect,
@@ -245,7 +246,7 @@ export default function CalendarPage() {
 
     try {
       const query = targetMonth ? `?month=${encodeURIComponent(targetMonth)}` : "";
-      const res = await fetch(`/api/stats/calendar${query}`, {
+      const res = await fetch(withBase(`/api/stats/calendar${query}`), {
         signal: controller.signal,
         cache: "no-store",
       });
@@ -298,7 +299,7 @@ export default function CalendarPage() {
 
     const loadListening = async () => {
       try {
-        const res = await fetch("/api/listening/time", { cache: "no-store" });
+        const res = await fetch(withBase("/api/listening/time"), { cache: "no-store" });
         if (!res.ok) return;
         const payload: unknown = await res.json().catch(() => null);
         if (cancelled || !payload || typeof payload !== "object") return;

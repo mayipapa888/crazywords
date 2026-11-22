@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useEffect, useState } from "react";
 
 /** 确保会话 cookie；若配置了 APP_ACCESS_PASSWORD 则显示门禁。 */
@@ -13,11 +14,11 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const meta = await fetch("/api/auth/login").then((r) => r.json());
+      const meta = await fetch(withBase("/api/auth/login")).then((r) => r.json());
       if (cancelled) return;
       if (meta.gated) {
         // 尝试已有解锁 cookie 的会话
-        const probe = await fetch("/api/me");
+        const probe = await fetch(withBase("/api/me"));
         if (probe.ok) {
           setReady(true);
           return;
@@ -25,7 +26,7 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
         setGated(true);
         return;
       }
-      await fetch("/api/auth/login", {
+      await fetch(withBase("/api/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}",
@@ -44,7 +45,7 @@ export function SessionBootstrap({ children }: { children: React.ReactNode }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch(withBase("/api/auth/login"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password }),

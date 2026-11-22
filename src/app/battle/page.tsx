@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import Link from "next/link";
 import {
   useCallback,
@@ -92,7 +93,7 @@ function readApiError(data: Record<string, unknown>, status: number): string {
  */
 async function requestEnter(): Promise<EnterOutcome> {
   try {
-    const response = await fetch("/api/pet/battle/enter", {
+    const response = await fetch(withBase("/api/pet/battle/enter"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: "{}",
@@ -124,7 +125,7 @@ async function requestEnter(): Promise<EnterOutcome> {
  */
 async function requestFinish(recordId: string, battle: BattleResult): Promise<FinishOutcome> {
   try {
-    const response = await fetch("/api/pet/battle/finish", {
+    const response = await fetch(withBase("/api/pet/battle/finish"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

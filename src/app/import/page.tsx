@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useState } from "react";
 
 type FileResult = {
@@ -30,7 +31,7 @@ export default function ImportPage() {
       const fd = new FormData();
       fd.append("file", file);
       fd.append("listName", listName);
-      const res = await fetch("/api/import", { method: "POST", body: fd });
+      const res = await fetch(withBase("/api/import"), { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) {
         setFileError(data.error || "导入失败");
@@ -82,10 +83,10 @@ export default function ImportPage() {
               <button type="submit" className="btn-primary" disabled={fileBusy}>
                 {fileBusy ? "导入中…" : "开始导入"}
               </button>
-              <a className="btn-secondary" href="/api/import/template">
+              <a className="btn-secondary" href={withBase("/api/import/template")}>
                 下载 Excel 模板
               </a>
-              <a className="text-xs text-[var(--teal)]" href="/templates/words-import.xlsx">
+              <a className="text-xs text-[var(--teal)]" href={withBase("/templates/words-import.xlsx")}>
                 静态模板链接
               </a>
             </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   LISTENING_MATERIALS,
@@ -114,7 +115,7 @@ export default function ListeningPage() {
 
     const load = async () => {
       try {
-        const res = await fetch("/api/listening/time", { cache: "no-store" });
+        const res = await fetch(withBase("/api/listening/time"), { cache: "no-store" });
         if (!res.ok) return;
         const payload: unknown = await res.json().catch(() => null);
         if (cancelled || !payload || typeof payload !== "object") return;
@@ -141,7 +142,7 @@ export default function ListeningPage() {
       if (disposed || inFlightRef.current) return;
       inFlightRef.current = true;
       try {
-        const res = await fetch("/api/listening/time", {
+        const res = await fetch(withBase("/api/listening/time"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ seconds: STEP_SECONDS }),

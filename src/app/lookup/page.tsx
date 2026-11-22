@@ -1,5 +1,6 @@
 "use client";
 
+import { withBase } from "@/lib/base-path";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
 import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
@@ -198,7 +199,7 @@ export default function LookupPage() {
       const gen = speakGen.current;
       setSpeaking(true);
       try {
-        const res = await fetch("/api/speech/tts", {
+        const res = await fetch(withBase("/api/speech/tts"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: word, language: "en-US" }),
@@ -292,7 +293,7 @@ export default function LookupPage() {
     }
     setRecording(false);
     try {
-      const res = await fetch("/api/lookup", {
+      const res = await fetch(withBase("/api/lookup"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: q }),
@@ -371,7 +372,7 @@ export default function LookupPage() {
     setError(null);
     try {
       const e = result.entry;
-      const res = await fetch("/api/entries/manual", {
+      const res = await fetch(withBase("/api/entries/manual"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -413,7 +414,7 @@ export default function LookupPage() {
     setBusy(true);
     setWrongError(null);
     try {
-      const res = await fetch("/api/wrong-book", {
+      const res = await fetch(withBase("/api/wrong-book"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -493,7 +494,7 @@ export default function LookupPage() {
     setGlossMsg(null);
     try {
       if (localEntryId) {
-        const res = await fetch(`/api/entries/${encodeURIComponent(localEntryId)}`, {
+        const res = await fetch(withBase(`/api/entries/${encodeURIComponent(localEntryId)}`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ glossZh: next }),
@@ -505,7 +506,7 @@ export default function LookupPage() {
         }
         applySavedGloss(word, next, null);
       } else {
-        const res = await fetch("/api/entries/manual", {
+        const res = await fetch(withBase("/api/entries/manual"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -599,7 +600,7 @@ export default function LookupPage() {
     setPosMsg(null);
     try {
       if (localEntryId) {
-        const res = await fetch(`/api/entries/${encodeURIComponent(localEntryId)}`, {
+        const res = await fetch(withBase(`/api/entries/${encodeURIComponent(localEntryId)}`), {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pos: next }),
@@ -611,7 +612,7 @@ export default function LookupPage() {
         }
         applySavedPos(word, next, null);
       } else {
-        const res = await fetch("/api/entries/manual", {
+        const res = await fetch(withBase("/api/entries/manual"), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
