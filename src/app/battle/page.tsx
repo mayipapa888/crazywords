@@ -685,6 +685,50 @@ export default function BattlePage() {
   const [finishState, setFinishState] = useState<FinishState>({ status: "idle" });
   const [restartPending, setRestartPending] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
+  /** 是否处于浏览器全屏 */
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // 同步全屏状态（用户按 Esc 退出时也要更新按钮文案）
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    onChange();
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+
+  /** 切换全屏：全屏的是战场容器，HUD/小地图会一起放大 */
+  const toggleFullscreen = useCallback(async () => {
+    const el = containerRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      // 浏览器拒绝（如非用户手势触发）时静默，不影响游戏
+    }
+  }, [containerRef]);
+
+  // 快捷键 F：全屏 / 退出全屏（输入框内不拦截）
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "f" && event.key !== "F") return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      void toggleFullscreen();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [toggleFullscreen]);
 
   /** 严格模式双挂载守卫：确保首次加载只扣一次券 */
   const enterMountRef = useRef(false);
@@ -825,6 +869,15 @@ export default function BattlePage() {
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="btn-secondary px-2.5 py-1 text-xs"
+            title="全屏 / 退出全屏（快捷键 F）"
+            aria-pressed={isFullscreen}
+          >
+            {isFullscreen ? "退出全屏" : "全屏"}
+          </button>
           <button
             type="button"
             onClick={toggleMuted}
