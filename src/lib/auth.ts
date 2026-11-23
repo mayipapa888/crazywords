@@ -1,11 +1,12 @@
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { NextResponse } from "next/server";
-import { randomBytes } from "crypto";
 import type { User } from "@prisma/client";
 import { prisma } from "./db";
 
 export const SESSION_COOKIE = "cw_sid";
 const MAX_AGE = 60 * 60 * 24 * 180; // 180 days
+const ACCESS_COOKIE = "cw_unlocked";
 
 function parseCookieHeader(header: string | null): Record<string, string> {
   const out: Record<string, string> = {};
@@ -20,44 +21,41 @@ function parseCookieHeader(header: string | null): Record<string, string> {
   return out;
 }
 
+function httpError(message: string, status: number): Error {
+  return Object.assign(new Error(message), { status });
+}
+
 export type AuthResult = {
   user: User;
-  /** 新会话时需写入响应 */
+  /** 新会话时需写入响应（当前账号体系下登录接口自行写 cookie，保留字段兼容旧调用） */
   newSessionKey?: string;
 };
 
+/** 判断库里的用户是否是可登录的正式账号。 */
+function isActiveAccount(user: User | null): user is User {
+  return Boolean(user && user.status === "active" && user.username);
+}
+
 /**
- * 按 httpOnly 会话 cookie 绑定独立用户，避免共享 demo 账号。
- * 可选 APP_ACCESS_PASSWORD：设置后须先通过 /api/auth/login。
+ * 按 httpOnly 会话 cookie 取当前登录用户。
+ * - 只认 status=active 且已设置 username 的账号，不再自动创建匿名用户；
+ * - 未登录 / 待审核 / 停用 / 会话失效一律抛 401「请先登录」。
+ * - 可选 APP_ACCESS_PASSWORD：设置后仍须 cw_unlocked=1 才能访问。
  */
 export async function requireUser(req: Request): Promise<AuthResult> {
+  const jar = parseCookieHeader(req.headers.get("cookie"));
   const gate = process.env.APP_ACCESS_PASSWORD?.trim();
-  if (gate) {
-    const unlocked = parseCookieHeader(req.headers.get("cookie"))["cw_unlocked"];
-    if (unlocked !== "1") {
-      const err = new Error("需要登录");
-      (err as Error & { status: number }).status = 401;
-      throw err;
-    }
+  if (gate && jar[ACCESS_COOKIE] !== "1") {
+    throw httpError("请先登录", 401);
   }
 
-  const jar = parseCookieHeader(req.headers.get("cookie"));
   const sid = jar[SESSION_COOKIE];
   if (sid) {
-    const existing = await prisma.user.findUnique({ where: { sessionKey: sid } });
-    if (existing) return { user: existing };
+    const user = await prisma.user.findUnique({ where: { sessionKey: sid } });
+    if (isActiveAccount(user)) return { user };
   }
 
-  const sessionKey = randomBytes(24).toString("hex");
-  const user = await prisma.user.create({
-    data: {
-      sessionKey,
-      locale: "zh-CN",
-      dailyGoalDefault: 20,
-      clozeEnabled: true,
-    },
-  });
-  return { user, newSessionKey: sessionKey };
+  throw httpError("请先登录", 401);
 }
 
 export function withSessionCookie(res: NextResponse, newSessionKey?: string): NextResponse {
@@ -87,24 +85,13 @@ export function errorJson(e: unknown, fallbackStatus = 500) {
   return NextResponse.json({ error: message }, { status });
 }
 
-/** Server Component / 页面侧读取当前用户（无则创建） */
+/** Server Component / 页面侧读取当前用户；未登录直接跳 /login，不创建用户。 */
 export async function getPageUser(): Promise<User> {
   const jar = await cookies();
   const sid = jar.get(SESSION_COOKIE)?.value;
   if (sid) {
-    const existing = await prisma.user.findUnique({ where: { sessionKey: sid } });
-    if (existing) return existing;
+    const user = await prisma.user.findUnique({ where: { sessionKey: sid } });
+    if (isActiveAccount(user)) return user;
   }
-  const sessionKey = randomBytes(24).toString("hex");
-  const user = await prisma.user.create({
-    data: { sessionKey, locale: "zh-CN", dailyGoalDefault: 20, clozeEnabled: true },
-  });
-  jar.set(SESSION_COOKIE, sessionKey, {
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-    maxAge: MAX_AGE,
-    secure: process.env.NODE_ENV === "production",
-  });
-  return user;
+  redirect("/login");
 }

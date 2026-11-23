@@ -1,101 +1,108 @@
 "use client";
 
 import { withBase } from "@/lib/base-path";
-import { useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { createContext, useContext, useEffect, useState } from "react";
 
-/** 确保会话 cookie；若配置了 APP_ACCESS_PASSWORD 则显示门禁。 */
+export type SessionUser = {
+  id: string;
+  username: string;
+  role: string;
+};
+
+type SessionValue = {
+  user: SessionUser | null;
+  ready: boolean;
+};
+
+const SessionContext = createContext<SessionValue>({ user: null, ready: false });
+
+/** 业务组件读取当前登录用户（由 SessionBootstrap 统一拉取，避免重复请求）。 */
+export function useSession(): SessionValue {
+  return useContext(SessionContext);
+}
+
+/** 登录 / 注册页自身放行，否则未登录访问它们会反复跳向自己。 */
+function isAuthPage(pathname: string): boolean {
+  const path = pathname.replace(/\/+$/, "") || "/";
+  // 同时兼容 usePathname() 是否带 basePath 的情况
+  return (
+    path === "/login" ||
+    path === "/register" ||
+    path.endsWith("/login") ||
+    path.endsWith("/register")
+  );
+}
+
+/**
+ * 会话引导：
+ * 1. 每次进入登录态边界（登录页 ↔ 业务页）时调用 GET /api/auth/me；
+ * 2. user === null 且当前不是登录/注册页 → router.replace("/login")；
+ * 3. 拿到用户后才渲染子内容，未登录时不会让业务页先发一堆 401 请求。
+ */
 export function SessionBootstrap({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname() ?? "";
+  const router = useRouter();
+  const authPage = isAuthPage(pathname);
+
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [ready, setReady] = useState(false);
-  const [gated, setGated] = useState(false);
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const meta = await fetch(withBase("/api/auth/login")).then((r) => r.json());
-      if (cancelled) return;
-      if (meta.gated) {
-        // 尝试已有解锁 cookie 的会话
-        const probe = await fetch(withBase("/api/me"));
-        if (probe.ok) {
-          setReady(true);
-          return;
+      let nextUser: SessionUser | null = null;
+      try {
+        const res = await fetch(withBase("/api/auth/me"), { cache: "no-store" });
+        if (res.ok) {
+          const data = (await res.json()) as { user?: SessionUser | null };
+          nextUser = data.user ?? null;
         }
-        setGated(true);
+      } catch {
+        // 网络异常按未登录处理：登录页继续展示表单，业务页回登录页
+      }
+      if (cancelled) return;
+
+      if (nextUser) {
+        setUser(nextUser);
+        setReady(true);
         return;
       }
-      await fetch(withBase("/api/auth/login"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: "{}",
-      });
-      if (!cancelled) setReady(true);
-    })().catch(() => {
-      if (!cancelled) setReady(true);
-    });
+
+      setUser(null);
+      if (authPage) {
+        setReady(true);
+        return;
+      }
+
+      router.replace("/login");
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authPage, router]);
 
-  async function login(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(withBase("/api/auth/login"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ password }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "登录失败");
-        return;
-      }
-      setGated(false);
-      setReady(true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (gated) {
+  // 登录 / 注册页无需等待会话探测，先渲染表单；业务页必须确认登录态
+  if (!ready && !authPage) {
     return (
-      <div className="min-h-[60vh] flex items-center justify-center px-4">
-        <form onSubmit={login} className="panel p-6 w-full max-w-sm space-y-4">
-          <h1 className="font-display text-2xl">CrazyWords</h1>
-          <p className="text-sm text-[var(--muted)]">此实例已开启访问门禁，请输入密码。</p>
-          <input
-            type="password"
-            className="field"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="访问密码"
-            autoFocus
-          />
-          {error && (
-            <p className="text-sm text-[var(--danger)] bg-[var(--danger-soft)] px-3 py-2 rounded-md">
-              {error}
-            </p>
-          )}
-          <button type="submit" className="btn-primary w-full" disabled={busy}>
-            {busy ? "验证中…" : "进入"}
-          </button>
-        </form>
+      <div className="flex min-h-screen items-center justify-center text-sm text-[var(--muted)]">
+        正在验证登录状态…
       </div>
     );
   }
 
-  if (!ready) {
+  if (!authPage && !user) {
+    // 已触发 redirect 或刚登录成功正在刷新会话；不要渲染业务页
     return (
-      <div className="min-h-[40vh] flex items-center justify-center text-[var(--muted)] text-sm">
-        初始化会话…
+      <div className="flex min-h-screen items-center justify-center text-sm text-[var(--muted)]">
+        正在加载…
       </div>
     );
   }
 
-  return <>{children}</>;
+  return (
+    <SessionContext.Provider value={{ user, ready }}>
+      {children}
+    </SessionContext.Provider>
+  );
 }

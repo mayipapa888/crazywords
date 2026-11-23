@@ -1,39 +1,22 @@
-import { randomBytes } from "crypto";
+import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
-import { SESSION_COOKIE } from "@/lib/auth";
+import { withSessionCookie } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { verifyPassword } from "@/lib/password";
 
-const SESSION_MAX_AGE = 60 * 60 * 24 * 180;
+const ACCESS_COOKIE = "cw_unlocked";
+const ACCESS_MAX_AGE = 60 * 60 * 24 * 30;
 
-function readCookie(req: Request, name: string): string | undefined {
-  const header = req.headers.get("cookie") || "";
-  for (const part of header.split(";")) {
-    const idx = part.indexOf("=");
-    if (idx < 0) continue;
-    const k = part.slice(0, idx).trim();
-    if (k === name) return decodeURIComponent(part.slice(idx + 1).trim());
-  }
-  return undefined;
+type LoginBody = {
+  username?: unknown;
+  password?: unknown;
+};
+
+function fail(error: string, status: number, extra?: Record<string, unknown>) {
+  return NextResponse.json({ error, ...extra }, { status });
 }
 
-async function ensureSessionUser(req: Request) {
-  const sid = readCookie(req, SESSION_COOKIE);
-  if (sid) {
-    const existing = await prisma.user.findUnique({ where: { sessionKey: sid } });
-    if (existing) return { user: existing, newSessionKey: undefined as string | undefined };
-  }
-  const sessionKey = randomBytes(24).toString("hex");
-  const user = await prisma.user.create({
-    data: {
-      sessionKey,
-      locale: "zh-CN",
-      dailyGoalDefault: 20,
-      clozeEnabled: true,
-    },
-  });
-  return { user, newSessionKey: sessionKey };
-}
-
+/** 供 AppShell 的门禁提示读取：是否配置了实例级访问密码。 */
 export async function GET() {
   return NextResponse.json({
     gated: Boolean(process.env.APP_ACCESS_PASSWORD?.trim()),
@@ -41,41 +24,75 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const gate = process.env.APP_ACCESS_PASSWORD?.trim();
+  try {
+    const raw: unknown = await req.json().catch(() => null);
+    const body: LoginBody = raw && typeof raw === "object" ? (raw as LoginBody) : {};
+    const username = typeof body.username === "string" ? body.username : "";
+    const password = typeof body.password === "string" ? body.password : "";
+    const gate = process.env.APP_ACCESS_PASSWORD?.trim();
 
-  if (gate) {
-    const body = await req.json().catch(() => ({}));
-    if (String(body.password || "") !== gate) {
-      return NextResponse.json({ error: "密码错误" }, { status: 401 });
+    // 兼容旧的实例门禁：SessionBootstrap 只提交 { password }。
+    // 密码等于 APP_ACCESS_PASSWORD 时只发解锁 cookie，不建立账号会话。
+    if (gate && password === gate && !username) {
+      const res = NextResponse.json({ ok: true, gated: true });
+      res.cookies.set(ACCESS_COOKIE, "1", {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: ACCESS_MAX_AGE,
+        secure: process.env.NODE_ENV === "production",
+      });
+      return res;
     }
-  }
 
-  const { user, newSessionKey } = await ensureSessionUser(req);
-  const res = NextResponse.json({
-    ok: true,
-    gated: Boolean(gate),
-    userId: user.id,
-  });
+    if (!username || !password) {
+      return fail("用户名或密码错误", 401);
+    }
 
-  if (gate) {
-    res.cookies.set("cw_unlocked", "1", {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30,
-      secure: process.env.NODE_ENV === "production",
+    const user = await prisma.user.findUnique({ where: { username } });
+    // 用户不存在、无密码（历史匿名账号）、密码错误统一返回同一提示
+    if (!user || !verifyPassword(password, user.passwordHash)) {
+      return fail("用户名或密码错误", 401);
+    }
+    if (user.status === "pending") {
+      return fail("账号待管理员开通", 403, { status: "pending" });
+    }
+    if (user.status === "disabled") {
+      return fail("账号已被停用", 403, { status: "disabled" });
+    }
+    if (user.status !== "active") {
+      return fail("账号不可用", 403, { status: user.status });
+    }
+
+    const sessionKey = randomBytes(24).toString("hex");
+    const updated = await prisma.user.update({
+      where: { id: user.id },
+      data: { sessionKey },
     });
-  }
 
-  if (newSessionKey) {
-    res.cookies.set(SESSION_COOKIE, newSessionKey, {
-      httpOnly: true,
-      sameSite: "lax",
-      path: "/",
-      maxAge: SESSION_MAX_AGE,
-      secure: process.env.NODE_ENV === "production",
+    const res = NextResponse.json({
+      ok: true,
+      user: {
+        id: updated.id,
+        username: updated.username,
+        role: updated.role,
+      },
     });
-  }
+    withSessionCookie(res, sessionKey);
 
-  return res;
+    // 开启实例门禁时，登录成功即视为通过门禁，避免再输一次访问密码
+    if (gate) {
+      res.cookies.set(ACCESS_COOKIE, "1", {
+        httpOnly: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: ACCESS_MAX_AGE,
+        secure: process.env.NODE_ENV === "production",
+      });
+    }
+
+    return res;
+  } catch {
+    return fail("登录失败，请稍后重试", 500);
+  }
 }

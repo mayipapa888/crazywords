@@ -12,6 +12,14 @@ datasource db {
 model User {
   id                     String   @id @default(cuid())
   sessionKey             String?  @unique // httpOnly cookie 绑定的会话用户
+  /// 注册账号：历史匿名用户为 NULL
+  username               String?  @unique
+  /// "scrypt:<salt>:<hash>"；历史匿名用户为 NULL
+  passwordHash           String?
+  /// "admin" | "user"
+  role                   String   @default("user")
+  /// "pending" | "active" | "disabled"
+  status                 String   @default("pending")
   locale                 String   @default("zh-CN")
   dailyGoalDefault       Int      @default(20)
   /// 沿用字段名：启用听写模式 B（报单词 → 说中文）；关闭则仅模式 A
