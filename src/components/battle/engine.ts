@@ -1472,30 +1472,43 @@ export class BattleEngine {
         pickup.active = false;
         continue;
       }
-      if (!player.alive) continue;
       const isMed = pickup.kind === "med";
+
+      // 医疗包：玩家和 AI 都能捡（谁先到谁拿，满血的不捡）
       if (isMed) {
-        if (player.hp >= MAX_HP) continue;
-      } else if (player.reserve >= RESERVE_CAP) {
+        let taker: Fighter | null = null;
+        let bestDist = 34 * 34;
+        for (const fighter of this.fighters) {
+          if (!fighter.alive || fighter.hp >= MAX_HP) continue;
+          const ddx = pickup.x - fighter.x;
+          const ddy = pickup.y - fighter.y;
+          const dist = ddx * ddx + ddy * ddy;
+          if (dist <= bestDist) {
+            bestDist = dist;
+            taker = fighter;
+          }
+        }
+        if (!taker) continue;
+        const heal = Math.min(pickup.amount, MAX_HP - taker.hp);
+        if (heal <= 0) continue;
+        pickup.active = false;
+        taker.hp += heal;
+        if (taker.isPlayer) {
+          this.events.push({
+            type: "feed",
+            text: `拾取 医疗包 +${heal} HP`,
+            tone: "loot",
+          });
+          this.events.push({ type: "pickup" });
+        }
         continue;
       }
+
+      // 弹药箱：只有玩家需要
+      if (!player.alive || player.reserve >= RESERVE_CAP) continue;
       const dx = pickup.x - player.x;
       const dy = pickup.y - player.y;
       if (dx * dx + dy * dy > 34 * 34) continue;
-
-      if (isMed) {
-        const heal = Math.min(pickup.amount, MAX_HP - player.hp);
-        if (heal <= 0) continue;
-        pickup.active = false;
-        player.hp += heal;
-        this.events.push({
-          type: "feed",
-          text: `拾取 医疗包 +${heal} HP`,
-          tone: "loot",
-        });
-        this.events.push({ type: "pickup" });
-        continue;
-      }
 
       const gained = Math.min(pickup.amount, RESERVE_CAP - player.reserve);
       if (gained <= 0) continue;
