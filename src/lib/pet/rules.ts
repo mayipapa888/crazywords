@@ -15,7 +15,7 @@ export const DEFAULT_PET_NAME = "小星";
 export const NAME_MAX_LENGTH = 12;
 
 /** 最高阶段 */
-export const MAX_STAGE = 5;
+export const MAX_STAGE = 8;
 
 /** 吃鸡券上限（超出部分直接丢弃） */
 export const MAX_TICKETS = 20;
@@ -53,10 +53,13 @@ export type PetStage = {
 /** 5 个阶段与累计 EXP 门槛（升序） */
 export const STAGES: readonly PetStage[] = [
   { stage: 1, name: "蛋", minExp: 0 },
-  { stage: 2, name: "幼崽", minExp: 100 },
-  { stage: 3, name: "少年", minExp: 300 },
-  { stage: 4, name: "成年", minExp: 700 },
-  { stage: 5, name: "传说", minExp: 1500 },
+  { stage: 2, name: "幼崽", minExp: 150 },
+  { stage: 3, name: "少年", minExp: 400 },
+  { stage: 4, name: "青年", minExp: 900 },
+  { stage: 5, name: "成年", minExp: 1600 },
+  { stage: 6, name: "精英", minExp: 2600 },
+  { stage: 7, name: "传说", minExp: 4000 },
+  { stage: 8, name: "神话", minExp: 7000 },
 ];
 
 /* -------------------------------------------------------------------------- */

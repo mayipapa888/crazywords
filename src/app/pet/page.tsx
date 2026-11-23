@@ -60,7 +60,10 @@ const STAGE_LINES = [
   "刚睁眼的小家伙，最喜欢听你读单词。",
   "已经能跟着你一起念，继续攒经验吧。",
   "羽翼渐丰，陪你把每天的学习变成习惯。",
+  "已经能带你复述整段故事，坚持就有惊喜。",
+  "精英形态，学得又快又稳，继续保持。",
   "传说中的学习搭子，满级后也继续发光。",
+  "神话形态，单词与听力都已融会贯通。",
 ];
 
 function isPetPayload(value: unknown): value is PetPayload {
@@ -467,6 +470,41 @@ function PetArt({ stage }: { stage: number }) {
       {stage === 3 && <TeenStage {...ids} />}
       {stage === 4 && <AdultStage {...ids} />}
       {stage >= 5 && <LegendStage {...ids} />}
+
+      {/* 5 阶以上的额外光环：精英银环 → 传说双金环 → 神话星轨 */}
+      {stage >= 6 && (
+        <ellipse
+          cx="100"
+          cy="118"
+          rx="78"
+          ry="26"
+          stroke={stage >= 8 ? "#a78bfa" : "#e2e8f0"}
+          strokeOpacity={stage >= 8 ? 0.9 : 0.55}
+          strokeWidth={stage >= 8 ? 2.2 : 1.6}
+          strokeDasharray={stage >= 8 ? "none" : "6 5"}
+        />
+      )}
+      {stage >= 7 && (
+        <ellipse
+          cx="100"
+          cy="118"
+          rx="92"
+          ry="34"
+          stroke="#fbbf24"
+          strokeOpacity="0.75"
+          strokeWidth="2"
+          strokeDasharray="3 6"
+        />
+      )}
+      {stage >= 8 && (
+        <>
+          <circle cx="100" cy="104" r="86" stroke="#c4b5fd" strokeOpacity="0.35" strokeWidth="1.5" />
+          <circle cx="132" cy="42" r="3" fill="#fde68a" />
+          <circle cx="58" cy="36" r="2.4" fill="#a5f3fc" />
+          <circle cx="164" cy="96" r="2.2" fill="#f0abfc" />
+          <circle cx="36" cy="104" r="2" fill="#fde68a" />
+        </>
+      )}
     </svg>
   );
 }
