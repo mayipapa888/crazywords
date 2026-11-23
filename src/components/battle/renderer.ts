@@ -459,26 +459,41 @@ export class BattleRenderer {
       const x = pickup.x;
       const y = pickup.y + bob;
 
-      ctx.fillStyle = "rgba(250, 204, 21, 0.16)";
+      const isMed = pickup.kind === "med";
+      const ring = isMed ? "rgba(74, 222, 128, 0.18)" : "rgba(250, 204, 21, 0.16)";
+      const box = isMed ? "#12301f" : "#3f3f24";
+      const edge = isMed ? "#4ade80" : "#facc15";
+
+      ctx.fillStyle = ring;
       ctx.beginPath();
       ctx.arc(x, y, 18, 0, TAU);
       ctx.fill();
 
-      ctx.fillStyle = "#3f3f24";
+      ctx.fillStyle = box;
       ctx.fillRect(x - 10, y - 7, 20, 14);
-      ctx.strokeStyle = "#facc15";
+      ctx.strokeStyle = edge;
       ctx.lineWidth = 1.5;
       ctx.strokeRect(x - 10, y - 7, 20, 14);
-      ctx.fillStyle = "#facc15";
-      ctx.fillRect(x - 10, y - 1.5, 20, 3);
-      ctx.fillStyle = "#1c1c10";
-      ctx.fillRect(x - 6, y + 3, 4, 2);
-      ctx.fillRect(x - 1, y + 3, 4, 2);
+
+      if (isMed) {
+        // 医疗包：白色箱体 + 红十字
+        ctx.fillStyle = "#f8fafc";
+        ctx.fillRect(x - 7, y - 4, 14, 8);
+        ctx.fillStyle = "#dc2626";
+        ctx.fillRect(x - 1.5, y - 6, 3, 12);
+        ctx.fillRect(x - 6, y - 1.5, 12, 3);
+      } else {
+        ctx.fillStyle = edge;
+        ctx.fillRect(x - 10, y - 1.5, 20, 3);
+        ctx.fillStyle = "#1c1c10";
+        ctx.fillRect(x - 6, y + 3, 4, 2);
+        ctx.fillRect(x - 1, y + 3, 4, 2);
+      }
 
       ctx.font = `700 9px ${FONT}`;
       ctx.textAlign = "center";
-      ctx.fillStyle = "rgba(253, 224, 71, 0.9)";
-      ctx.fillText("AMMO", x, y - 12);
+      ctx.fillStyle = isMed ? "rgba(134, 239, 172, 0.95)" : "rgba(253, 224, 71, 0.9)";
+      ctx.fillText(isMed ? "MED" : "AMMO", x, y - 12);
     }
   }
 

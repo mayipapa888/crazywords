@@ -19,10 +19,17 @@ export const ZONE_CENTER = WORLD_SIZE / 2;
 const TAU = Math.PI * 2;
 const BULLET_POOL = 320;
 const PARTICLE_POOL = 260;
-const PICKUP_POOL = 24;
+const PICKUP_POOL = 32;
 const PICKUP_AMMO = 30;
+const PICKUP_HEAL = 35;
 const PICKUP_LIFE = 45;
 const RESERVE_CAP = 240;
+const MAX_HP = 100;
+/** 击杀掉落时出医疗包的概率 */
+const PICKUP_MED_CHANCE = 0.35;
+/** 开局地图上散布的补给数量 */
+const INITIAL_AMMO_CRATES = 10;
+const INITIAL_MED_KITS = 8;
 
 export type ObstacleKind = "crate" | "tree";
 export type AiState = "wander" | "hunt" | "zone";
@@ -98,8 +105,11 @@ export interface Particle {
   color: string;
 }
 
+export type PickupKind = "ammo" | "med";
+
 export interface Pickup {
   active: boolean;
+  kind: PickupKind;
   x: number;
   y: number;
   amount: number;
@@ -408,8 +418,9 @@ export class BattleEngine {
       });
     }
     for (let i = 0; i < PICKUP_POOL; i += 1) {
-      this.pickups.push({ active: false, x: 0, y: 0, amount: PICKUP_AMMO, life: 0 });
+      this.pickups.push({ active: false, kind: "ammo", x: 0, y: 0, amount: PICKUP_AMMO, life: 0 });
     }
+    this.scatterInitialPickups();
   }
 
   /* ------------------------------------------------------------------ */
@@ -1335,7 +1346,10 @@ export class BattleEngine {
       0.6,
     );
 
-    if (!victim.isPlayer) this.dropAmmo(victim.x, victim.y);
+    if (!victim.isPlayer) {
+      const kind: PickupKind = Math.random() < PICKUP_MED_CHANCE ? "med" : "ammo";
+      this.dropLoot(victim.x, victim.y, kind);
+    }
 
     if (victim.isPlayer) {
       this.finish("dead");
@@ -1408,9 +1422,14 @@ export class BattleEngine {
   /* 弹药补给                                                             */
   /* ------------------------------------------------------------------ */
 
-  private dropAmmo(x: number, y: number): void {
+  private dropLoot(x: number, y: number, kind: PickupKind): void {
     // 只在玩家附近掉落，远处 AI 互殴不会堆一地盒子
     if (Math.hypot(x - this.player.x, y - this.player.y) > 900) return;
+    this.spawnPickupAt(x, y, kind);
+  }
+
+  /** 在指定位置放一个补给（弹药箱或医疗包） */
+  private spawnPickupAt(x: number, y: number, kind: PickupKind): void {
     let pickup: Pickup | null = null;
     for (let i = 0; i < PICKUP_POOL; i += 1) {
       const index = (this.pickupCursor + i) % PICKUP_POOL;
@@ -1427,8 +1446,21 @@ export class BattleEngine {
     pickup.active = true;
     pickup.x = x + (Math.random() - 0.5) * 18;
     pickup.y = y + (Math.random() - 0.5) * 18;
-    pickup.amount = PICKUP_AMMO;
+    pickup.kind = kind;
+    pickup.amount = kind === "med" ? PICKUP_HEAL : PICKUP_AMMO;
     pickup.life = PICKUP_LIFE;
+  }
+
+  /** 开局在地图上撒一批补给，避免只能靠击杀掉落 */
+  private scatterInitialPickups(): void {
+    const margin = 260;
+    const span = WORLD_SIZE - margin * 2;
+    for (let i = 0; i < INITIAL_AMMO_CRATES; i += 1) {
+      this.spawnPickupAt(margin + Math.random() * span, margin + Math.random() * span, "ammo");
+    }
+    for (let i = 0; i < INITIAL_MED_KITS; i += 1) {
+      this.spawnPickupAt(margin + Math.random() * span, margin + Math.random() * span, "med");
+    }
   }
 
   private updatePickups(dt: number): void {
@@ -1440,10 +1472,31 @@ export class BattleEngine {
         pickup.active = false;
         continue;
       }
-      if (!player.alive || player.reserve >= RESERVE_CAP) continue;
+      if (!player.alive) continue;
+      const isMed = pickup.kind === "med";
+      if (isMed) {
+        if (player.hp >= MAX_HP) continue;
+      } else if (player.reserve >= RESERVE_CAP) {
+        continue;
+      }
       const dx = pickup.x - player.x;
       const dy = pickup.y - player.y;
       if (dx * dx + dy * dy > 34 * 34) continue;
+
+      if (isMed) {
+        const heal = Math.min(pickup.amount, MAX_HP - player.hp);
+        if (heal <= 0) continue;
+        pickup.active = false;
+        player.hp += heal;
+        this.events.push({
+          type: "feed",
+          text: `拾取 医疗包 +${heal} HP`,
+          tone: "loot",
+        });
+        this.events.push({ type: "pickup" });
+        continue;
+      }
+
       const gained = Math.min(pickup.amount, RESERVE_CAP - player.reserve);
       if (gained <= 0) continue;
       pickup.active = false;
