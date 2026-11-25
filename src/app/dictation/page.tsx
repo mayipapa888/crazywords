@@ -64,6 +64,58 @@ const ANSWER_REPEAT = 2;
 /** 正解播报每遍之间的间隔（ms） */
 const ANSWER_PASS_GAP_MS = 700;
 
+/** 当前所有在播的媒体对象（页面级注册表），用于「一键全停」兜底 */
+const liveAudios = new Set<HTMLAudioElement>();
+
+/**
+ * 强制停止页面上一切语音播放：
+ * 1) 暂停并卸载注册表里的所有 Audio；
+ * 2) 再扫一遍 DOM 里的 <audio>（防止有未注册的实例）；
+ * 3) 取消浏览器 speechSynthesis，并在下一个 tick 再取消一次（Chrome 有过漏停）。
+ */
+function stopAllSpeechNow(): void {
+  for (const audio of liveAudios) {
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+      audio.src = "";
+      audio.load();
+    } catch {
+      // 忽略
+    }
+  }
+  liveAudios.clear();
+
+  if (typeof document !== "undefined") {
+    document.querySelectorAll("audio").forEach((audio) => {
+      try {
+        audio.pause();
+        audio.currentTime = 0;
+        audio.src = "";
+        audio.load();
+      } catch {
+        // 忽略
+      }
+    });
+  }
+
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    try {
+      window.speechSynthesis.pause();
+      window.speechSynthesis.cancel();
+      window.setTimeout(() => {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // 忽略
+        }
+      }, 0);
+    } catch {
+      // 忽略
+    }
+  }
+}
+
 function playUtterance(text: string, lang: string): Promise<void> {
   return new Promise((resolve) => {
     try {
@@ -92,10 +144,12 @@ function playAudioBase64(
   return new Promise((resolve) => {
     const src = `data:${mimeType || "audio/mpeg"};base64,${audioBase64}`;
     const audio = new Audio(src);
+    liveAudios.add(audio);
     let settled = false;
     const done = () => {
       if (settled) return;
       settled = true;
+      liveAudios.delete(audio);
       if (holder && holder.current === audio) holder.current = null;
       resolve();
     };
@@ -346,6 +400,8 @@ export default function DictationPage() {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
+    // 兜底：页面级注册表 + DOM 扫描 + speechSynthesis 二次取消
+    stopAllSpeechNow();
   }, []);
 
   /** 立即终止正在进行的题目 TTS（音频 / 浏览器语音），手动提前开录时用 */
@@ -363,6 +419,8 @@ export default function DictationPage() {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
+    // 兜底：页面级注册表 + DOM 扫描 + speechSynthesis 二次取消
+    stopAllSpeechNow();
   }, []);
 
   /** 正解播报单遍朗读：优先用后端返回的音频，否则退浏览器语音 */
@@ -901,6 +959,8 @@ export default function DictationPage() {
       if (latestPhase === "tts") {
         if (!isConfirmKey || latestBusy) return;
         event.preventDefault();
+        // 先做一次全局强停，确保正在响的音频立刻停住
+        stopAllSpeechNow();
         manualStartRef.current();
         return;
       }
