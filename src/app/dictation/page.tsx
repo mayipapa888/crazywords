@@ -222,6 +222,8 @@ export default function DictationPage() {
   const manualStartRef = useRef<() => void>(() => undefined);
   const nextWordRef = useRef<() => void>(() => undefined);
   const retryWordRef = useRef<() => void>(() => undefined);
+  /** 看提示 / 收起提示 */
+  const hintToggleRef = useRef<() => void>(() => undefined);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autoNextTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -846,6 +848,7 @@ export default function DictationPage() {
    * - 播报中（phase === "tts"）：立即停播并开始录音 → manualStartRecording()
    * - 录音中（recording）：等同点「结束并判定」→ endRecordingAndJudge()
    * - 反馈态（feedback）：回车/空格 重试本词，→ 下一个
+   * - 其余等待态：回车/空格 直接判定，→ 看提示
    * 跳过长按重复、中文输入法组合、输入框/可编辑区、以及 Ctrl/Meta/Alt 组合键。
    */
   useEffect(() => {
@@ -902,11 +905,15 @@ export default function DictationPage() {
         return;
       }
 
-      // 其余等待状态：→ 跳过当前词
-      if (isNextKey && !latestBusy) {
+      // 其余等待状态：回车/空格 直接判定（语音已完成后立即出结果），→ 看提示
+      if (latestBusy) return;
+      if (isNextKey) {
         event.preventDefault();
-        nextWordRef.current();
+        hintToggleRef.current();
+        return;
       }
+      event.preventDefault();
+      void submitAttemptRef.current();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -1011,6 +1018,7 @@ export default function DictationPage() {
   useEffect(() => {
     nextWordRef.current = nextWord;
     retryWordRef.current = retryCurrent;
+    hintToggleRef.current = toggleHint;
   });
 
   useEffect(() => {
