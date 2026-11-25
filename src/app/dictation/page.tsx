@@ -938,6 +938,10 @@ export default function DictationPage() {
         return;
       }
 
+      // 会话中任何被处理的按键都先让语音静音：
+      // 播报可能比 phase 状态晚结束，避免「按下后还在响」。
+      stopAllSpeechNow();
+
       // 已出反馈：→ 下一个单词，空格/回车 重试本词
       if (latestFeedback) {
         if (latestBusy) return;
