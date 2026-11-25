@@ -220,6 +220,18 @@ model BattleRecord {
   @@index([userId, createdAt])
 }
 
+/// 在线对战一次性连接票据：Next 写入，独立 WS 进程校验并消费（60 秒有效）
+model OnlineTicket {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  userId    String
+  username  String
+  expiresAt DateTime
+  used      Boolean  @default(false)
+
+  @@index([expiresAt])
+}
+
 /// 积分消耗流水：喂食等消耗，可用积分 = 累计积分 − SUM(amount)
 model PointSpend {
   id        String   @id @default(cuid())

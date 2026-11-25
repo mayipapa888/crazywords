@@ -1,0 +1,16 @@
+[Unit]
+Description=CrazyWords online battle WebSocket server (127.0.0.1:3100 /ws)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+# .env（含 DATABASE_URL）由 ws-server.mjs 内的 dotenv 从该工作目录读取
+WorkingDirectory=/root/crazywords
+ExecStart=/usr/bin/node server/ws-server.mjs
+Restart=always
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

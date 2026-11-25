@@ -1032,6 +1032,12 @@ export default function PetPage() {
               <span className="text-[10px] text-[var(--danger)]">先去学习攒券</span>
             </>
           )}
+          <Link
+            href="/battle-online"
+            className="mt-1 text-[11px] font-medium text-[var(--teal)] transition-colors hover:text-[var(--ink)]"
+          >
+            在线对战（8 人实时 PvP）→
+          </Link>
         </div>
       </div>
     </div>
