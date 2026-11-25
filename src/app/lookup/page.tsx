@@ -2,8 +2,6 @@
 
 import { withBase } from "@/lib/base-path";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { extractLemmaFromTranscript } from "@/lib/speech/extract-lemma";
-import { RealtimeAsrSession } from "@/lib/speech/realtime-client";
 
 type SenseView = {
   pos: string;
@@ -65,34 +63,6 @@ function optionalList(value: string[] | undefined): string[] | undefined {
   return value && value.length > 0 ? value : undefined;
 }
 
-/**
- * 把 getUserMedia / 实时识别抛出的错误翻成页面内一行中文提示。
- * 只有点「开始语音识别」时才会走到这里；失败不影响手动输入查词。
- */
-function micErrorMessage(err: unknown): string {
-  if (err instanceof DOMException) {
-    switch (err.name) {
-      case "NotAllowedError":
-      case "PermissionDeniedError":
-        return "麦克风权限被拒绝：请在浏览器地址栏允许麦克风后重试。仍可手动输入查词。";
-      case "NotFoundError":
-      case "DevicesNotFoundError":
-        return "未检测到麦克风设备。仍可手动输入查词。";
-      case "NotReadableError":
-      case "TrackStartError":
-        return "麦克风被其他程序占用或无法读取。仍可手动输入查词。";
-      case "SecurityError":
-        return "当前页面无法访问麦克风（需 HTTPS 或 localhost）。仍可手动输入查词。";
-      case "AbortError":
-        return "麦克风启动被中断，请重试或手动输入查词。";
-      default:
-        break;
-    }
-  }
-  if (err instanceof Error && err.message) return err.message;
-  return "无法开始实时识别，仍可手动输入查词。";
-}
-
 function playUtterance(text: string, lang: string): Promise<void> {
   return new Promise((resolve) => {
     try {
@@ -140,7 +110,6 @@ function playAudioBase64(
 
 export default function LookupPage() {
   const [text, setText] = useState("");
-  const [recording, setRecording] = useState(false);
   const [result, setResult] = useState<LookupResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -160,8 +129,6 @@ export default function LookupPage() {
   const [posError, setPosError] = useState<string | null>(null);
   const [posMsg, setPosMsg] = useState<string | null>(null);
   const [speaking, setSpeaking] = useState(false);
-  const asrRef = useRef<RealtimeAsrSession | null>(null);
-  const textRef = useRef("");
   // 当前展示的单词：异步保存返回时用它判断用户是否已经查了别的词
   const currentWordRef = useRef<string | null>(null);
   currentWordRef.current = result?.entry?.word ?? null;
@@ -227,7 +194,6 @@ export default function LookupPage() {
 
   useEffect(() => {
     return () => {
-      void asrRef.current?.stop().catch(() => undefined);
       stopWordSpeech();
     };
   }, [stopWordSpeech]);
@@ -263,7 +229,7 @@ export default function LookupPage() {
   const runLookup = useCallback(async (query: string) => {
     const q = query.trim();
     if (!q) {
-      setError("请输入或语音识别后再查询");
+      setError("请输入要查询的单词或中文释义");
       return;
     }
     setBusy(true);
@@ -281,17 +247,6 @@ export default function LookupPage() {
     setPosDraft("");
     setPosError(null);
     setPosMsg(null);
-    // 查询前先停掉仍在进行的实时识别：先清引用再 await，避免查询期间继续写入输入框
-    const asr = asrRef.current;
-    asrRef.current = null;
-    if (asr) {
-      try {
-        await asr.stop();
-      } catch {
-        // 停止识别失败不应打断查询
-      }
-    }
-    setRecording(false);
     try {
       const res = await fetch(withBase("/api/lookup"), {
         method: "POST",
@@ -306,7 +261,6 @@ export default function LookupPage() {
       setResult(data);
       if (data.query) {
         setText(data.query);
-        textRef.current = data.query;
       }
     } catch {
       setError("查词失败");
@@ -314,56 +268,6 @@ export default function LookupPage() {
       setBusy(false);
     }
   }, []);
-
-  async function startVoice() {
-    setError(null);
-    setAddMsg(null);
-    // 仅在此按钮回调里触碰麦克风：进入页面、打字、查词都不会申请权限
-    if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setError("当前环境不支持麦克风（需 HTTPS 或 localhost）。仍可手动输入查词。");
-      return;
-    }
-    let session: RealtimeAsrSession | null = null;
-    try {
-      session = new RealtimeAsrSession(
-        {
-          onPartial: (t) => {
-            // 实时写入可编辑框（优先提取英文 lemma，否则保留全文）
-            const lemma = extractLemmaFromTranscript(t);
-            const next = lemma || t;
-            textRef.current = next;
-            setText(next);
-          },
-          onFinal: (t) => {
-            const lemma = extractLemmaFromTranscript(t);
-            const next = lemma || t;
-            textRef.current = next;
-            setText(next);
-          },
-          onError: (e) => setError(e.message),
-        },
-        { language: "en", targetText: textRef.current || undefined },
-      );
-      asrRef.current = session;
-      await session.start();
-      if (asrRef.current !== session) {
-        // 启动期间用户已发起查询（或已离开），立即收尾，避免麦克风继续采集
-        await session.stop().catch(() => undefined);
-        return;
-      }
-      setRecording(true);
-    } catch (e) {
-      if (session && asrRef.current === session) asrRef.current = null;
-      setError(micErrorMessage(e));
-    }
-  }
-
-  async function stopVoice() {
-    const s = asrRef.current;
-    asrRef.current = null;
-    if (s) await s.stop().catch(() => undefined);
-    setRecording(false);
-  }
 
   async function addToList() {
     if (!result?.entry?.word) return;
@@ -668,13 +572,12 @@ export default function LookupPage() {
   return (
     <div className="flex h-full flex-col gap-2">
       <div className="shrink-0">
-        <h1 className="font-display text-xl">语音查词</h1>
+        <h1 className="font-display text-xl">查词</h1>
         <p className="text-xs text-[var(--muted)] mt-0.5">
-          实时识别写入下方输入框，可改后再查询。支持中文或英文；先查本地词表，没有再外网补全。
+          输入英语单词或中文释义后查询。支持中文或英文；先查本地词表，没有再外网补全。
         </p>
       </div>
 
-      {/* 不在这里申请麦克风：输入框和查词按钮先可用，点「开始语音识别」才 getUserMedia */}
       <div className="panel p-3 space-y-2 shrink-0">
         <div className="flex flex-wrap items-center gap-2">
           <label className="label shrink-0 mb-0">查询（可编辑）</label>
@@ -682,33 +585,13 @@ export default function LookupPage() {
             className="field flex-1 min-w-[10rem] text-sm"
             value={text}
             onChange={(e) => {
-              textRef.current = e.target.value;
               setText(e.target.value);
             }}
-            placeholder="说英语单词或中文释义，或直接输入"
+            placeholder="输入英语单词或中文释义"
             onKeyDown={(e) => {
               if (e.key === "Enter") void runLookup(text);
             }}
           />
-          {!recording ? (
-            <button
-              type="button"
-              className="btn-secondary text-sm shrink-0"
-              disabled={busy}
-              onClick={() => void startVoice()}
-            >
-              开始语音识别
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn-accent text-sm shrink-0"
-              disabled={busy}
-              onClick={() => void stopVoice()}
-            >
-              停止识别
-            </button>
-          )}
           <button
             type="button"
             className="btn-primary text-sm shrink-0"
@@ -718,9 +601,6 @@ export default function LookupPage() {
             {busy ? "查询中…" : "确定查询"}
           </button>
         </div>
-        {recording && (
-          <p className="text-xs text-[var(--accent)]">实时识别中…可随时改字后点「确定查询」</p>
-        )}
         {error && (
           <p className="text-xs text-[var(--danger)] bg-[var(--danger-soft)] px-2 py-1 rounded-md">
             {error}

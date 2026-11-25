@@ -79,19 +79,27 @@ export default function ListeningPage() {
   const material = LISTENING_MATERIALS[0] ?? daily;
 
   const [part, setPart] = useState(() => Math.min(suggestedPart, material.pages));
-  /** 仅在首次恢复上次进度时非 0，作为播放器起播秒数 */
-  const [startAt, setStartAt] = useState(0);
-  /** 恢复出的上次位置，用于顶部提示 */
-  const [resumeNote, setResumeNote] = useState<string | null>(null);
+  /** 播放器起播秒数：默认回退到当集第 1 秒，恢复成功时改为上次位置 */
+  const [startAt, setStartAt] = useState(1);
+  /**
+   * 顶部「上次听到」标签的数据：有记录时随停留位置每 5 秒刷新；
+   * null 表示还没有任何收听记录（首次进入且未落盘 / 切集）。
+   */
+  const [heard, setHeard] = useState<{ page: number; posSeconds: number } | null>(null);
   const posRef = useRef(0);
   const restoredRef = useRef(false);
+  /** 是否已有可展示的收听记录：恢复成功 / 切集 / 落盘后为 true */
+  const hasRecordRef = useRef(false);
+  /** 当前集数的同步镜像：落盘与计时回调里读取，避免闭包拿到旧集数 */
+  const pageRef = useRef(part);
+  pageRef.current = part;
 
   /** 今日已听秒数；null 表示尚未取到 */
   const [todaySeconds, setTodaySeconds] = useState<number | null>(null);
   /** 同一时刻只允许一次上报，避免网络慢时请求堆积 */
   const inFlightRef = useRef(false);
 
-  // 进入页面：恢复上次的集数与播放位置
+  // 进入页面：恢复上次的集数与播放位置；没有可用记录时回退到当集第 1 秒
   useEffect(() => {
     if (restoredRef.current) return;
     restoredRef.current = true;
@@ -99,14 +107,13 @@ export default function ListeningPage() {
     if (!last) return;
     if (last.bvid && last.bvid !== material.bvid) return;
     const page = Math.min(Math.max(1, last.page), material.pages);
+    const posSeconds = Math.max(0, Math.floor(last.posSeconds));
     setPart(page);
-    posRef.current = last.posSeconds;
-    if (last.posSeconds > 0) {
-      setStartAt(last.posSeconds);
-      setResumeNote(`上次听到第 ${page} 集 ${formatClock(last.posSeconds)}`);
-    } else {
-      setResumeNote(`上次听到第 ${page} 集`);
-    }
+    pageRef.current = page;
+    posRef.current = posSeconds;
+    hasRecordRef.current = true;
+    setHeard({ page, posSeconds });
+    if (posSeconds > 0) setStartAt(posSeconds);
   }, [material.bvid, material.pages]);
 
   // 进入页面先取一次今日累计
@@ -174,20 +181,38 @@ export default function ListeningPage() {
     };
   }, []);
 
-  /** 把当前集数与位置落盘 */
+  /** 把当前集数与位置（精度到秒）落盘 */
   const persist = useCallback(() => {
+    const page = pageRef.current;
+    const posSeconds = Math.max(0, Math.floor(posRef.current));
     writeLast({
       bvid: material.bvid,
-      page: part,
-      posSeconds: posRef.current,
+      page,
+      posSeconds,
       updatedAt: new Date().toISOString(),
     });
-  }, [material.bvid, part]);
+    // 已落盘即视为有记录：顶部标签从「还没有收听记录」切换为具体位置
+    hasRecordRef.current = true;
+    setHeard((prev) =>
+      prev && prev.page === page && prev.posSeconds === posSeconds
+        ? prev
+        : { page, posSeconds },
+    );
+  }, [material.bvid]);
 
-  // 播放位置：可见时按 5 秒累计（跨域拿不到 iframe 真实进度，用停留时长近似）
+  // 播放位置：可见时按 5 秒累计（跨域拿不到 iframe 真实进度，用停留时长近似），
+  // 并同步刷新顶部标签；隐藏时停止累计，但不清零。
   useEffect(() => {
     const tick = window.setInterval(() => {
-      if (document.visibilityState === "visible") posRef.current += POS_TICK_MS / 1000;
+      if (document.visibilityState !== "visible") return;
+      posRef.current += POS_TICK_MS / 1000;
+      if (!hasRecordRef.current) return;
+      const posSeconds = Math.max(0, Math.floor(posRef.current));
+      setHeard((prev) =>
+        prev && prev.page === pageRef.current && prev.posSeconds === posSeconds
+          ? prev
+          : { page: pageRef.current, posSeconds },
+      );
     }, POS_TICK_MS);
     const saveTimer = window.setInterval(persist, POS_SAVE_MS);
 
@@ -207,8 +232,10 @@ export default function ListeningPage() {
   /** 手动切集：位置清零，不再沿用上次起播点 */
   const changePart = useCallback((next: number) => {
     posRef.current = 0;
-    setStartAt(0);
-    setResumeNote(null);
+    pageRef.current = next;
+    hasRecordRef.current = true;
+    setStartAt(1);
+    setHeard({ page: next, posSeconds: 0 });
     setPart(next);
   }, []);
 
@@ -257,7 +284,15 @@ export default function ListeningPage() {
       <section className="panel flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-[var(--line)] px-3 py-2">
           <h2 className="min-w-0 flex-1 truncate text-sm font-bold">{material.title}</h2>
-          {resumeNote && <span className="badge shrink-0">{resumeNote}</span>}
+          {/* 始终显示收听状态：有记录时每 5 秒随停留位置刷新，无记录时给出提示 */}
+          <span
+            className="badge shrink-0 whitespace-nowrap tabular-nums"
+            title="上次听到的集数与位置，每 5 秒刷新；离开或隐藏页面时立即保存"
+          >
+            {heard
+              ? `上次听到 第 ${heard.page} 集 · ${formatClock(heard.posSeconds)}`
+              : "还没有收听记录"}
+          </span>
           <span
             className="badge shrink-0"
             title="本页可见时每 30 秒累计一次；切到后台自动暂停"

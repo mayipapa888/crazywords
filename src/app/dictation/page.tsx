@@ -218,6 +218,8 @@ export default function DictationPage() {
   /** window 键盘监听里调用最新的「开始听写 / 结束并判定」，避免闭包绑定旧函数 */
   const startSessionRef = useRef<() => void>(() => undefined);
   const endRecordingRef = useRef<() => void>(() => undefined);
+  /** tts 播报中按回车/空格：中断播报并开录（等价点「开始录音」），避免闭包过期 */
+  const manualStartRef = useRef<() => void>(() => undefined);
   const nextWordRef = useRef<() => void>(() => undefined);
   const retryWordRef = useRef<() => void>(() => undefined);
   const autoStartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -248,8 +250,24 @@ export default function DictationPage() {
     : selectedMode;
 
   /** 键盘监听读取的最新状态快照：每次渲染同步，回调里不会拿到旧值 */
-  const latestRef = useRef({ sessionId, recording, feedback, busy, index, total: items.length });
-  latestRef.current = { sessionId, recording, feedback, busy, index, total: items.length };
+  const latestRef = useRef({
+    sessionId,
+    recording,
+    feedback,
+    busy,
+    index,
+    total: items.length,
+    phase,
+  });
+  latestRef.current = {
+    sessionId,
+    recording,
+    feedback,
+    busy,
+    index,
+    total: items.length,
+    phase,
+  };
 
   const clearTimers = useCallback(() => {
     if (autoStartTimer.current) clearTimeout(autoStartTimer.current);
@@ -820,11 +838,14 @@ export default function DictationPage() {
   /** 供 window 键盘监听调用；每次渲染同步为最新实现（含最新 props/state 闭包） */
   startSessionRef.current = startSession;
   endRecordingRef.current = endRecordingAndJudge;
+  manualStartRef.current = manualStartRecording;
 
   /**
-   * 全局回车 / 空格快捷键（只在两种状态生效，其它状态一律放行给浏览器）：
+   * 全局回车 / 空格快捷键：
    * - 未开始会话（sessionId 为空）：等同点「开始听写」→ startSession()
+   * - 播报中（phase === "tts"）：立即停播并开始录音 → manualStartRecording()
    * - 录音中（recording）：等同点「结束并判定」→ endRecordingAndJudge()
+   * - 反馈态（feedback）：回车/空格 重试本词，→ 下一个
    * 跳过长按重复、中文输入法组合、输入框/可编辑区、以及 Ctrl/Meta/Alt 组合键。
    */
   useEffect(() => {
@@ -846,6 +867,7 @@ export default function DictationPage() {
         recording: latestRecording,
         feedback: latestFeedback,
         busy: latestBusy,
+        phase: latestPhase,
       } = latestRef.current;
 
       if (!latestSessionId) {
@@ -869,6 +891,14 @@ export default function DictationPage() {
         if (!isConfirmKey || latestBusy) return;
         event.preventDefault();
         endRecordingRef.current();
+        return;
+      }
+
+      // 播报中：空格/回车 立即掐断 TTS（wordGen 自增作废后续自动开录）并马上开录
+      if (latestPhase === "tts") {
+        if (!isConfirmKey || latestBusy) return;
+        event.preventDefault();
+        manualStartRef.current();
         return;
       }
 
