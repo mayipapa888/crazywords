@@ -187,10 +187,10 @@ function fmt(value: number | undefined): string {
 }
 
 const DEFAULT_RULES: PointsRules = {
-  pointsPerWord: 10,
-  checkinBonus: 20,
-  newWordBonus: 5,
-  listeningMinutesPerPoint: 5,
+  pointsPerWord: 5,
+  checkinBonus: 5,
+  newWordBonus: 0,
+  listeningMinutesPerPoint: 1,
 };
 
 /** 累计积分徽章：悬停/聚焦时以列表形式展示积分规则 */
@@ -216,7 +216,7 @@ function PointsBadge({
         <p className="mb-1 font-medium text-[var(--ink)]">积分规则</p>
         <ul className="space-y-0.5">
           <li>· 听写每个单词 +{r.pointsPerWord} 分（同一天同词只算一次）</li>
-          <li>· 首次学到新词 额外 +{r.newWordBonus} 分</li>
+          
           <li>· 当日有听写打卡 +{r.checkinBonus} 分</li>
           <li>· 磨耳朵 每 {r.listeningMinutesPerPoint} 分钟 +1 分</li>
         </ul>

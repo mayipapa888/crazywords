@@ -9,13 +9,13 @@
 import { prisma } from "@/lib/db";
 
 /** 每个不重复单词的积分 */
-export const POINTS_PER_WORD = 10;
+export const POINTS_PER_WORD = 5;
 /** 当天有打卡（至少 1 个 attempt）的额外积分 */
-export const CHECKIN_BONUS = 20;
+export const CHECKIN_BONUS = 5;
 /** 首次学到一个新词（该词历史第一次出现）的额外积分 */
-export const NEW_WORD_BONUS = 5;
+export const NEW_WORD_BONUS = 0;
 /** 磨耳朵多少秒计 1 分 */
-export const LISTENING_SECONDS_PER_POINT = 300;
+export const LISTENING_SECONDS_PER_POINT = 60;
 
 const TZ = "Asia/Shanghai";
 

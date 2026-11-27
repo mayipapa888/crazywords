@@ -887,7 +887,7 @@ export default function PetPage() {
 
         {showPointsInfo && (
           <p className="mt-1.5 rounded-lg border border-[var(--line)] bg-[var(--paper)] px-2 py-1.5 text-[11px] leading-relaxed text-[var(--muted)]">
-            积分从今天 0 点起重新计算：不重复单词 ×10 + 当天打卡 20 + 首次新词 ×5 + 磨耳朵每 5 分钟 1；
+            积分从今天 0 点起重新计算：每背一个单词 +5 + 当天打卡 +5 + 磨耳朵每 1 分钟 +1；
             喂食每次消耗 {pet.feedPointsCost} 分并记入积分流水，因此「当前可用积分 =
             累计积分 − 已消耗积分」。
           </p>

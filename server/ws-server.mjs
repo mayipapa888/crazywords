@@ -47,8 +47,8 @@ const SHOOT_RANGE = 900;
 const SHOOT_CONE = 0.22; // 扇形半角（≈12.6°）
 const SHOOT_DAMAGE = 25;
 
-const MATCH_DURATION = 180; // 3 分钟一局
-const SHRINK_START = 60; // 60 秒后开始收缩
+const MATCH_DURATION = 240; // 4 分钟一局（缩圈放慢）
+const SHRINK_START = 120; // 120 秒后开始收缩（放慢毒圈）
 const ZONE_CENTER_X = WORLD_WIDTH / 2;
 const ZONE_CENTER_Y = WORLD_HEIGHT / 2;
 const ZONE_START_RADIUS = 1300; // 开局覆盖整张地图

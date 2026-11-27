@@ -201,11 +201,11 @@ interface ZoneStage {
 
 /** 开局 15 秒后开始第一次收缩，之后逐级加速 */
 const ZONE_STAGES: ZoneStage[] = [
-  { wait: 15, shrink: 20, from: 2000, to: 1250, dps: 2 },
-  { wait: 8, shrink: 18, from: 1250, to: 780, dps: 4 },
-  { wait: 6, shrink: 15, from: 780, to: 450, dps: 6 },
-  { wait: 5, shrink: 12, from: 450, to: 200, dps: 9 },
-  { wait: 4, shrink: 10, from: 200, to: 70, dps: 13 },
+  { wait: 45, shrink: 32, from: 2000, to: 1250, dps: 2 },
+  { wait: 28, shrink: 30, from: 1250, to: 780, dps: 4 },
+  { wait: 22, shrink: 26, from: 780, to: 450, dps: 6 },
+  { wait: 18, shrink: 22, from: 450, to: 200, dps: 9 },
+  { wait: 14, shrink: 18, from: 200, to: 70, dps: 13 },
 ];
 
 const AI_NAMES = [

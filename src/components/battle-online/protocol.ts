@@ -14,8 +14,8 @@ export const PLAYER_RADIUS = 18;
 export const MOVE_SPEED = 260;
 
 export const SHOOT_COOLDOWN_MS = 600;
-export const MATCH_DURATION_SECONDS = 180;
-export const SHRINK_START_SECONDS = 60;
+export const MATCH_DURATION_SECONDS = 240;
+export const SHRINK_START_SECONDS = 120;
 export const RESET_DELAY_SECONDS = 10;
 export const ZONE_START_RADIUS = 1300;
 
