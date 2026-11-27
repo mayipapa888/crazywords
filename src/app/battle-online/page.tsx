@@ -47,6 +47,8 @@ type HudState = {
   kills: number;
   alive: number;
   total: number;
+  /** 真人数量；旧服务端没有 humans 字段时为 null */
+  humans: number | null;
   selfAlive: boolean;
   timeLeft: number;
   phase: MatchPhase;
@@ -69,6 +71,7 @@ const INITIAL_HUD: HudState = {
   kills: 0,
   alive: 0,
   total: 0,
+  humans: null,
   selfAlive: false,
   timeLeft: MATCH_DURATION_SECONDS,
   phase: "waiting",
@@ -221,7 +224,9 @@ function HudOverlay({ hud, feed }: { hud: HudState; feed: FeedItem[] }) {
           <span className="font-mono text-white/40">{formatClock(hud.timeLeft)}</span>
         </div>
         <div className="mt-1 text-[10px] text-white/40">
-          房间 {hud.total}/{MAX_PLAYERS} 人
+          {hud.humans === null
+            ? `房间 ${hud.total}/${MAX_PLAYERS} 人`
+            : `真人 ${hud.humans} · 机器人 ${Math.max(0, hud.total - hud.humans)}`}
         </div>
       </div>
 
@@ -312,6 +317,7 @@ function WaitingOverlay({ total }: { total: number }) {
         <p className="mt-1 text-sm text-white/60">
           当前 {total}/{MAX_PLAYERS} 人 · 满 2 人自动开局
         </p>
+        <p className="mt-1 text-[11px] text-white/45">开局后机器人补位到 8 人混战</p>
         <p className="mt-2 text-[11px] text-white/40">
           把网址发给朋友，或先熟悉 WASD / 鼠标操作
         </p>
@@ -491,6 +497,7 @@ export default function BattleOnlinePage() {
       kills: self?.kills ?? 0,
       alive: state.alive,
       total: state.total,
+      humans: typeof state.humans === "number" ? state.humans : null,
       selfAlive: self?.alive ?? false,
       timeLeft: state.timeLeft,
       phase: state.phase,
@@ -542,8 +549,14 @@ export default function BattleOnlinePage() {
         case "kill": {
           const victimMe = message.victimId === selfIdRef.current;
           const killerMe = message.killerId === selfIdRef.current;
+          const victimBot =
+            latestStateRef.current?.players.find(
+              (player) => player.id === message.victimId,
+            )?.bot === true;
           const text = message.killerId
-            ? `${message.killerName} 淘汰了 ${message.victimName}`
+            ? victimBot
+              ? `${message.killerName} 击杀 ${message.victimName}`
+              : `${message.killerName} 淘汰了 ${message.victimName}`
             : `${message.victimName} 被毒圈淘汰`;
           pushFeed(
             text,
@@ -787,8 +800,13 @@ export default function BattleOnlinePage() {
       phase === "playing" &&
       Math.hypot(me.x - zone.cx, me.y - zone.cy) > zone.radius;
 
+    // 机器人名字前加标识，和真人区分（服务端名字本身是「机器人N」）
+    const viewPlayers = players.map((player) =>
+      player.bot ? { ...player, name: `🤖 ${player.name}` } : player,
+    );
+
     return {
-      players,
+      players: viewPlayers,
       zone,
       selfId: selfIdRef.current,
       phase,

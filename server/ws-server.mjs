@@ -47,6 +47,21 @@ const SHOOT_RANGE = 900;
 const SHOOT_CONE = 0.22; // 扇形半角（≈12.6°）
 const SHOOT_DAMAGE = 25;
 
+/* 机器人：对局开始时按人类数量补位，服务端权威 AI（不与客户端共享逻辑） */
+const BOT_TARGET_TOTAL = 8; // 开局把总人数补齐到 8（人类 + 机器人）
+const BOT_SPEED = 250; // px/s，略慢于真人
+const BOT_SHOOT_RANGE = 700;
+const BOT_HIT_CHANCE = 0.55;
+const BOT_DAMAGE = 12;
+const BOT_COOLDOWN_MS = 600;
+const BOT_THINK_MIN_MS = 1200; // 每 1.2–2.0 秒做一次索敌 / 开火判定
+const BOT_THINK_MAX_MS = 2000;
+/** 机器人在安全区内游走的半径比例（随机偏移，避免全挤在圈心） */
+const BOT_ZONE_MIN_FACTOR = 0.22;
+const BOT_ZONE_MAX_FACTOR = 0.7;
+/** 距毒圈边缘小于该值时视为“贴边”，优先向圈心移动（简单避圈） */
+const BOT_ZONE_EDGE_MARGIN = 90;
+
 const MATCH_DURATION = 240; // 4 分钟一局（缩圈放慢）
 const SHRINK_START = 120; // 120 秒后开始收缩（放慢毒圈）
 const ZONE_CENTER_X = WORLD_WIDTH / 2;
@@ -156,7 +171,7 @@ const room = {
  * @typedef {object} Player
  * @property {string} id
  * @property {string} name
- * @property {WebSocket} ws
+ * @property {WebSocket | null} ws 机器人没有连接，为 null
  * @property {number} x
  * @property {number} y
  * @property {number} aim
@@ -167,6 +182,12 @@ const room = {
  * @property {number} lastInputAt
  * @property {number} lastSeq
  * @property {number} moveBudget
+ * @property {boolean} [bot] 是否为服务端补位的机器人
+ * @property {number} [nextThinkAt] 机器人下一次索敌 / 开火判定时间
+ * @property {string | null} [targetId] 机器人当前锁定的目标
+ * @property {number} [wanderAngle] 机器人绕安全区中心游走的角度
+ * @property {number} [wanderUntil] 机器人重新随机游走角度的时间
+ * @property {number} [zoneRadiusFactor] 机器人游走半径占安全区半径的比例
  */
 
 function send(ws, message) {
@@ -178,6 +199,7 @@ function send(ws, message) {
 function broadcast(message) {
   const data = JSON.stringify(message);
   for (const player of room.players.values()) {
+    if (player.bot || !player.ws) continue;
     if (player.ws.readyState === WebSocket.OPEN) {
       player.ws.send(data);
     }
@@ -186,6 +208,14 @@ function broadcast(message) {
 
 function alivePlayers() {
   return [...room.players.values()].filter((player) => player.alive);
+}
+
+function humanPlayers() {
+  return [...room.players.values()].filter((player) => !player.bot);
+}
+
+function humanCount() {
+  return humanPlayers().length;
 }
 
 function respawnPlayer(player) {
@@ -219,6 +249,7 @@ function makeState() {
       hp: Math.max(0, Math.ceil(player.hp)),
       kills: player.kills,
       alive: player.alive,
+      bot: player.bot === true,
     })),
     zone: {
       cx: zone.cx,
@@ -232,6 +263,7 @@ function makeState() {
     },
     alive,
     total: room.players.size,
+    humans: humanCount(),
     maxPlayers: MAX_PLAYERS,
     elapsed: round(room.elapsed, 2),
     timeLeft: round(Math.max(0, MATCH_DURATION - room.elapsed), 2),
@@ -247,6 +279,72 @@ function broadcastState() {
 }
 
 /* -------------------------------------------------------------------------- */
+/* 机器人                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/** 创建一个机器人实体（结构与人类玩家一致，多一个 bot:true） */
+function createBot(index) {
+  const point = spawnPoint(0.65);
+  const now = Date.now();
+  return {
+    id: `bot-${room.matchNo}-${index + 1}`,
+    name: `机器人${index + 1}`,
+    ws: null,
+    bot: true,
+    x: point.x,
+    y: point.y,
+    aim: Math.random() * TAU - Math.PI,
+    hp: MAX_HP,
+    kills: 0,
+    alive: true,
+    cooldownUntil: 0,
+    lastInputAt: 0,
+    lastSeq: 0,
+    moveBudget: MOVE_BURST,
+    nextThinkAt: now + 900 + Math.random() * 900,
+    targetId: null,
+    wanderAngle: Math.random() * TAU,
+    wanderUntil: now + 3000 + Math.random() * 3000,
+    zoneRadiusFactor:
+      BOT_ZONE_MIN_FACTOR + Math.random() * (BOT_ZONE_MAX_FACTOR - BOT_ZONE_MIN_FACTOR),
+  };
+}
+
+/** 开局补位：总人数补到 8；人类 ≥ 8 时不补 */
+function spawnBots() {
+  const wanted = Math.max(0, BOT_TARGET_TOTAL - humanCount());
+  for (let i = 0; i < wanted; i += 1) {
+    const bot = createBot(i);
+    room.players.set(bot.id, bot);
+  }
+  return wanted;
+}
+
+function removeBots() {
+  for (const [id, player] of room.players) {
+    if (player.bot) room.players.delete(id);
+  }
+}
+
+/** 人类中途加入时机器人让位，保证总人数不超过 MAX_PLAYERS */
+function trimBotsToCapacity() {
+  const humans = humanCount();
+  const maxBots = Math.max(0, MAX_PLAYERS - humans);
+  const bots = [...room.players.values()]
+    .filter((player) => player.bot)
+    .sort((a, b) => {
+      if (a.alive !== b.alive) return a.alive ? 1 : -1; // 优先移除已淘汰的
+      return a.kills - b.kills;
+    });
+  let botCount = bots.length;
+  for (const bot of bots) {
+    if (botCount <= maxBots) break;
+    room.players.delete(bot.id);
+    botCount -= 1;
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /* 对局流程                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -258,14 +356,20 @@ function startMatch() {
   room.winnerId = null;
   room.matchNo += 1;
 
+  // 机器人只在开局瞬间生成：先清掉上一局残留，再按当前真人数补位
+  removeBots();
   for (const player of room.players.values()) respawnPlayer(player);
+  const bots = spawnBots();
 
-  console.log(`[ws] match #${room.matchNo} start · ${room.players.size} players`);
+  console.log(
+    `[ws] match #${room.matchNo} start · ${room.players.size} players (${humanCount()} humans + ${bots} bots)`,
+  );
   broadcast({
     type: "matchStart",
     matchNo: room.matchNo,
     at: room.startedAt,
     players: room.players.size,
+    humans: humanCount(),
     duration: MATCH_DURATION,
   });
   broadcastState();
@@ -277,6 +381,7 @@ function resetToWaiting() {
   room.elapsed = 0;
   room.endedAt = 0;
   room.winnerId = null;
+  removeBots();
   for (const player of room.players.values()) respawnPlayer(player);
   broadcastState();
 }
@@ -297,17 +402,12 @@ function endMatch(winner, reason) {
   room.endedAt = Date.now();
   room.winnerId = winner ? winner.id : null;
 
-  for (const player of room.players.values()) {
-    player.alive = winner ? player.id === winner.id : false;
-    if (player.alive) player.hp = Math.max(1, player.hp);
-    else player.hp = 0;
-  }
-
+  // 先按结算前的存活状态排名：胜者 > 存活者（按击杀、血量）> 已淘汰者
   const ranking = [...room.players.values()]
     .sort((a, b) => {
-      if (a.id === b.id) return 0;
       if (a.id === room.winnerId) return -1;
       if (b.id === room.winnerId) return 1;
+      if (a.alive !== b.alive) return a.alive ? -1 : 1;
       return b.kills - a.kills || b.hp - a.hp;
     })
     .map((player, index) => ({
@@ -316,6 +416,12 @@ function endMatch(winner, reason) {
       kills: player.kills,
       placement: index + 1,
     }));
+
+  for (const player of room.players.values()) {
+    player.alive = winner ? player.id === winner.id : false;
+    if (player.alive) player.hp = Math.max(1, player.hp);
+    else player.hp = 0;
+  }
 
   console.log(
     `[ws] match #${room.matchNo} end · reason=${reason} · winner=${winner ? winner.name : "-"}`,
@@ -334,15 +440,23 @@ function endMatch(winner, reason) {
 
 function maybeStartMatch() {
   if (room.phase !== "waiting") return;
-  if (room.players.size < 2) return;
+  // 只按真人数量判断开局，机器人不会让等待阶段提前开始
+  if (humanCount() < 2) return;
   startMatch();
 }
 
-function checkRoundEnd(fallbackWinner) {
+function checkRoundEnd() {
   if (room.phase !== "playing") return;
   const alive = alivePlayers();
-  if (alive.length <= 1) {
-    endMatch(alive[0] ?? fallbackWinner ?? null, alive.length === 1 ? "lastAlive" : "timeout");
+  const aliveHumans = alive.filter((player) => !player.bot);
+  // 人类全灭：即使还有机器人也立即结束（人类按剩余存活名次排位）
+  if (aliveHumans.length === 0) {
+    endMatch(null, "lastAlive");
+    return;
+  }
+  // 存活总数（人类 + 机器人）只剩 1 且是人类 → 该人类吃鸡
+  if (alive.length === 1) {
+    endMatch(alive[0], "lastAlive");
   }
 }
 
@@ -369,7 +483,7 @@ function killPlayer(killer, victim, cause) {
     at: Date.now(),
   });
 
-  checkRoundEnd(killer);
+  checkRoundEnd();
 }
 
 function damagePlayer(attacker, target, damage, cause) {
@@ -480,6 +594,118 @@ function handleShoot(player, message) {
   if (target) damagePlayer(player, target, SHOOT_DAMAGE, "gun");
 }
 
+/* -------------------------------------------------------------------------- */
+/* 机器人 AI（服务端权威）                                                     */
+/* -------------------------------------------------------------------------- */
+
+/** 距离 700 内最近的存活单位（人类或机器人） */
+function nearestTarget(bot) {
+  let target = null;
+  let best = BOT_SHOOT_RANGE;
+  for (const other of room.players.values()) {
+    if (other.id === bot.id || !other.alive) continue;
+    const dist = distance(bot.x, bot.y, other.x, other.y);
+    if (dist <= best) {
+      best = dist;
+      target = other;
+    }
+  }
+  return target;
+}
+
+function updateBots(dt, now) {
+  if (room.phase !== "playing") return;
+  const zone = zoneAt(room.elapsed);
+
+  for (const bot of room.players.values()) {
+    if (!bot.bot || !bot.alive) continue;
+
+    // 游走点：安全区内带随机偏移；贴边 / 圈外则向圈心靠拢（被毒圈推着走）
+    if (now >= bot.wanderUntil) {
+      bot.wanderAngle = Math.random() * TAU;
+      bot.wanderUntil = now + 3000 + Math.random() * 3000;
+      bot.zoneRadiusFactor =
+        BOT_ZONE_MIN_FACTOR + Math.random() * (BOT_ZONE_MAX_FACTOR - BOT_ZONE_MIN_FACTOR);
+    }
+
+    const dxc = bot.x - zone.cx;
+    const dyc = bot.y - zone.cy;
+    const distCenter = Math.hypot(dxc, dyc);
+    let tx;
+    let ty;
+    if (distCenter > Math.max(0, zone.radius - BOT_ZONE_EDGE_MARGIN)) {
+      // 简单避圈：朝圈内 1/4 半径处走，尽快离开危险区
+      tx = zone.cx + dxc * 0.25;
+      ty = zone.cy + dyc * 0.25;
+    } else {
+      const radius = zone.radius * bot.zoneRadiusFactor;
+      tx = zone.cx + Math.cos(bot.wanderAngle) * radius;
+      ty = zone.cy + Math.sin(bot.wanderAngle) * radius;
+    }
+
+    const dx = tx - bot.x;
+    const dy = ty - bot.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 10) {
+      const step = Math.min(dist, BOT_SPEED * dt);
+      bot.x = clamp(bot.x + (dx / dist) * step, PLAYER_RADIUS, WORLD_WIDTH - PLAYER_RADIUS);
+      bot.y = clamp(bot.y + (dy / dist) * step, PLAYER_RADIUS, WORLD_HEIGHT - PLAYER_RADIUS);
+    }
+
+    // 沿用上一次锁定的目标（若仍存活且在射程内）
+    let aimTarget = null;
+    if (bot.targetId) {
+      const current = room.players.get(bot.targetId);
+      if (
+        current &&
+        current.alive &&
+        current.id !== bot.id &&
+        distance(bot.x, bot.y, current.x, current.y) <= BOT_SHOOT_RANGE
+      ) {
+        aimTarget = current;
+      } else {
+        bot.targetId = null;
+      }
+    }
+
+    // 每 1.2–2.0 秒索敌一次：700 内取最近目标，55% 命中，12 伤害，600ms 冷却
+    if (now >= bot.nextThinkAt) {
+      bot.nextThinkAt =
+        now + BOT_THINK_MIN_MS + Math.random() * (BOT_THINK_MAX_MS - BOT_THINK_MIN_MS);
+      const target = nearestTarget(bot);
+      bot.targetId = target ? target.id : null;
+      aimTarget = target;
+
+      if (target && now >= bot.cooldownUntil) {
+        bot.cooldownUntil = now + BOT_COOLDOWN_MS;
+        const baseAim = Math.atan2(target.y - bot.y, target.x - bot.x);
+        const hit = Math.random() < BOT_HIT_CHANCE;
+        // 未命中时给一个可见的偏角，客户端弹道不会“指哪打哪”
+        const aim = hit ? baseAim : baseAim + (Math.random() - 0.5) * 0.6;
+        bot.aim = baseAim;
+        broadcast({
+          type: "shoot",
+          id: bot.id,
+          name: bot.name,
+          aim: round(aim, 3),
+          hitId: hit ? target.id : null,
+          at: now,
+        });
+        if (hit) {
+          damagePlayer(bot, target, BOT_DAMAGE, "gun");
+          if (room.phase !== "playing") return;
+        }
+      }
+    }
+
+    if (aimTarget && aimTarget.alive) {
+      bot.aim = Math.atan2(aimTarget.y - bot.y, aimTarget.x - bot.x);
+    } else if (dist > 10) {
+      bot.aim = Math.atan2(dy, dx);
+    }
+  }
+}
+
 function applyZoneDamage(dt) {
   if (room.phase !== "playing" || room.elapsed < SHRINK_START) return;
   const zone = zoneAt(room.elapsed);
@@ -519,6 +745,8 @@ function addPlayer(ws, ticket) {
   };
 
   room.players.set(player.id, player);
+  // 中途加入的真人优先于机器人：多出来时移除机器人，保持总人数 ≤ 8
+  trimBotsToCapacity();
   ws.__playerId = player.id;
 
   send(ws, {
@@ -543,7 +771,9 @@ function addPlayer(ws, ticket) {
     total: room.players.size,
   });
 
-  console.log(`[ws] + ${player.name} (${room.players.size}/${MAX_PLAYERS})`);
+  console.log(
+    `[ws] + ${player.name} (${room.players.size}/${MAX_PLAYERS} · ${humanCount()} humans)`,
+  );
   maybeStartMatch();
   broadcastState();
 }
@@ -559,16 +789,19 @@ function removePlayer(player, reason) {
     total: room.players.size,
   });
 
-  console.log(`[ws] - ${player.name} (${room.players.size}/${MAX_PLAYERS}) ${reason}`);
+  console.log(
+    `[ws] - ${player.name} (${room.players.size}/${MAX_PLAYERS} · ${humanCount()} humans) ${reason}`,
+  );
 
-  if (room.players.size === 0) {
+  // 没有真人了：连机器人一起清空，避免出现“空房间里的机器人局”
+  if (humanCount() === 0) {
     clearRoom();
     return;
   }
 
   if (room.phase === "playing") {
-    // 掉线视为淘汰：剩余 1 人直接结算
-    checkRoundEnd(null);
+    // 掉线视为淘汰：人类全灭 / 只剩 1 个存活单位时直接结算
+    checkRoundEnd();
   }
   broadcastState();
 }
@@ -602,7 +835,7 @@ async function authenticate(ws, token) {
       return;
     }
 
-    if (room.players.size >= MAX_PLAYERS) {
+    if (humanCount() >= MAX_PLAYERS) {
       ws.close(4002, "房间已满（最多 8 人），稍后再试");
       return;
     }
@@ -715,7 +948,8 @@ const tickTimer = setInterval(() => {
 
     if (room.phase === "playing") {
       room.elapsed = (now - room.startedAt) / 1000;
-      applyZoneDamage(dt);
+      updateBots(dt, now);
+      if (room.phase === "playing") applyZoneDamage(dt);
 
       if (room.phase === "playing" && room.elapsed >= MATCH_DURATION) {
         const candidates = alivePlayers().sort(
@@ -724,7 +958,8 @@ const tickTimer = setInterval(() => {
         endMatch(candidates[0] ?? null, "timeout");
       }
     } else if (room.phase === "ended" && now - room.endedAt >= RESET_DELAY_MS) {
-      if (room.players.size >= 2) startMatch();
+      // 只有真人 ≥ 2 才开下一局（机器人不参与“凑人数开局”）
+      if (humanCount() >= 2) startMatch();
       else resetToWaiting();
       return;
     }

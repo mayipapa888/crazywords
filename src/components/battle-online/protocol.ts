@@ -31,6 +31,8 @@ export type NetPlayer = {
   hp: number;
   kills: number;
   alive: boolean;
+  /** 服务端补位的机器人（在线对战；旧服务端缺省） */
+  bot?: boolean;
 };
 
 export type NetZone = {
@@ -68,6 +70,8 @@ export type StateMessage = {
   zone: NetZone;
   alive: number;
   total: number;
+  /** 房间内真人数量（total 为人类 + 机器人；旧服务端缺省） */
+  humans?: number;
   maxPlayers: number;
   elapsed: number;
   timeLeft: number;
@@ -112,7 +116,10 @@ export type MatchStartMessage = {
   type: "matchStart";
   matchNo: number;
   at: number;
+  /** 本局总人数（人类 + 机器人） */
   players: number;
+  /** 本局真人数量（旧服务端缺省） */
+  humans?: number;
   duration: number;
 };
 
